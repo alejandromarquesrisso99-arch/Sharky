@@ -1,0 +1,30 @@
+# Entornos virtuales
+.venv/
+env/
+venv/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Variables de entorno y secretos
+.env
+
+# Distribución / Build
+dist/
+build/
+*.egg-info/
+
+# Archivos de sistema y editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Obsidian cache / workspace local (preservando notas)
+vault/.obsidian/workspace*
+vault/.obsidian/cache/
