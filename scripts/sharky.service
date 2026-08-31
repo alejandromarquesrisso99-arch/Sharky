@@ -1,5 +1,5 @@
 [Unit]
-Description=Sharky - Cerebro Digital Autonomo de Inversion 24/7
+Description=Sharky Capital Management - Firma Autonoma de Inversion 24/7
 After=network.target
 
 [Service]

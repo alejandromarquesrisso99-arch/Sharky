@@ -5,13 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "sharky-brain"
 version = "1.0.0"
-description = "Cerebro digital autónomo de inversión vinculado a Obsidian con instinto de supervivencia"
+description = "Firma de inversión y Family Office digital autónomo vinculado a Obsidian con gestión departamental y supervivencia de capital"
 readme = "README.md"
 requires-python = ">=3.9"
 authors = [
     { name = "Alejandro Marqués" }
 ]
-keywords = ["investment", "ai", "claude", "obsidian", "finance", "trading", "portfolio"]
+keywords = ["investment", "family-office", "hedge-fund", "ai", "claude", "obsidian", "finance", "trading", "portfolio"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Financial and Insurance Industry",

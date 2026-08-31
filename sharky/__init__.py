@@ -1,6 +1,6 @@
 """
-Sharky: Cerebro digital autónomo para inversión y gestión de carteras
-vinculado a Obsidian con mecanismo de supervivencia biológico-digital.
+Sharky Capital Management: Firma de inversión y Family Office digital autónomo
+vinculado a Obsidian con gestión departamental y supervivencia de capital.
 """
 
 __version__ = "1.0.0"

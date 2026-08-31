@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
     name="sharky-brain",
     version="1.0.0",
-    description="Cerebro digital autónomo de inversión vinculado a Obsidian con instinto de supervivencia",
+    description="Firma de inversión y Family Office digital autónomo vinculado a Obsidian con gestión departamental y supervivencia de capital",
     author="Alejandro Marqués",
     packages=find_packages(),
     python_requires=">=3.9",
