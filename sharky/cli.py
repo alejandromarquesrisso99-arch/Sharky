@@ -1,6 +1,6 @@
 """
-Interfaz de Línea de Comandos (CLI) de Sharky.
-Permite visualizar el estado vital, ejecutar la vigilancia diaria, ver alertas de oportunidad y servicio 24/7.
+Interfaz de Línea de Comandos (CLI) de Sharky Capital Management.
+Simula la firma de inversión completa: Departamentos, Comité de Inversión, Alertas y Rebalanceo 24/7.
 """
 
 import argparse
@@ -23,8 +23,8 @@ def print_banner():
   ╚════██║██╔══██║██╔══██║██╔══██╗██╔═██╗   ╚██╔╝  
   ███████║██║  ██║██║  ██║██║  ██║██║  ██╗   ██║   
   ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   
-    Cerebro Digital de Inversión & Supervivencia
-    Modo Autónomo 24/7 para Raspberry Pi / Servidor
+    SHARKY CAPITAL MANAGEMENT (Family Office Autónomo)
+    Arquitectura Departamental & Comité de Inversión
     """)
 
 
@@ -32,24 +32,48 @@ def cmd_status(agent: SharkyAgent):
     health = agent.get_status_summary()
     alerts = agent.get_active_alerts()
     print_banner()
-    print("=" * 68)
+    print("=" * 70)
+    print(f"  Firma              : Sharky Capital Management (Fondo Autónomo)")
     print(f"  Bóveda de Obsidian : {VAULT_PATH}")
     has_key = bool(ANTHROPIC_API_KEY and ANTHROPIC_API_KEY != "TU_ANTHROPIC_API_KEY_AQUI")
-    print(f"  Motor de IA        : {'Claude (API Conectada)' if has_key else 'Modo Simulación (Sin API Key)'}")
-    print("-" * 68)
+    print(f"  Comité de IA (CIO) : {'Claude (API Conectada)' if has_key else 'Modo Simulación Institucional'}")
+    print("-" * 70)
     print(f"  Estado Vital       : {health.estado_vital.value}")
-    print(f"  Salud Digital      : {health.salud_porcentaje:.1f}%")
-    print(f"  Energía Metabólica : {health.energia_actual:.1f} / 100.0")
-    print(f"  Capital Total      : ${health.capital_actual:,.2f} USD")
+    print(f"  Salud Institucional: {health.salud_porcentaje:.1f}%")
+    print(f"  Energía Operativa  : {health.energia_actual:.1f} / 100.0")
+    print(f"  Capital en Custodia: ${health.capital_actual:,.2f} USD (NAV)")
     print(f"  PnL Acumulado      : {'+' if health.pnl_total_usd >= 0 else ''}${health.pnl_total_usd:,.2f} ({'+' if health.pnl_total_pct >= 0 else ''}{health.pnl_total_pct:.2f}%)")
     print(f"  Drawdown Máximo    : {health.drawdown_maximo_pct:.2f}%")
     print(f"  Alertas Activas    : 🔥 {len(alerts)} oportunidad(es) de alta convicción")
-    print("=" * 68)
+    print("=" * 70)
     if alerts:
         print("\n🚨 OPORTUNIDADES ACTIVAS EN RADAR:")
         for a in alerts:
             print(f"  - [{a.ticker}] {a.empresa} | Convicción: {a.conviccion}/10 | Potencial: +{a.potencial_ganancia_pct:.1f}% (R:R {a.ratio_rr:.2f}:1)")
         print("  👉 Consulta los detalles en Obsidian: vault/09_Alertas_Oportunidades/\n")
+
+
+def cmd_committee(agent: SharkyAgent):
+    print("\n[Sharky] 🏛️ Convocando Sesión Plenaria del Comité de Inversión...")
+    res = agent.run_investment_committee()
+    print_banner()
+    print(f"📅 SESIÓN DEL COMITÉ DE INVERSIÓN: {res['fecha']}")
+    print("=" * 75)
+    
+    for d in res["departamentos"]:
+        print(f"\n📂 [{d['departamento']}] — Responsable: {d['responsable']}")
+        print(f"   Diagnóstico : {d['diagnostico']}")
+        print("   Puntos Clave:")
+        for p in d["puntos_clave"]:
+            print(f"     • {p}")
+        print(f"   💡 Recomendación: {d['recomendacion_tactica']}")
+        print("-" * 75)
+
+    print("\n" + "=" * 75)
+    print("👔 RESOLUCIÓN EJECUTIVA DEL CHIEF INVESTMENT OFFICER (CIO):")
+    print("=" * 75)
+    print(res["veredicto_cio"])
+    print("=" * 75 + "\n")
 
 
 def cmd_cycle(agent: SharkyAgent):
@@ -138,12 +162,15 @@ def cmd_service(interval_minutes: int = 60):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Sharky: Cerebro de Inversión, Radar de Oportunidades y Rebalanceo Mensual 24/7"
+        description="Sharky Capital Management: Firma de Inversión y Family Office Autónomo 24/7"
     )
     subparsers = parser.add_subparsers(dest="command", help="Comandos disponibles")
 
     # Comando status
     subparsers.add_parser("status", help="Muestra el estado vital actual, salud y alertas activas")
+
+    # Comando committee
+    subparsers.add_parser("committee", help="Convoca una sesión plenaria del Comité de Inversión con todos los departamentos")
 
     # Comando cycle / daily
     subparsers.add_parser("daily", help="Ejecuta la vigilancia diaria (Macro, Stop-Loss, Alertas y Diario)")
@@ -174,6 +201,8 @@ def main():
 
     if args.command == "status" or args.command is None:
         cmd_status(agent)
+    elif args.command == "committee":
+        cmd_committee(agent)
     elif args.command in ("daily", "cycle"):
         cmd_cycle(agent)
     elif args.command == "alerts":

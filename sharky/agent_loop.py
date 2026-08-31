@@ -1,6 +1,6 @@
 """
 Bucle de ejecución y ciclos cognitivos de Sharky.
-Orquesta la inteligencia diaria, la detección de alertas de oportunidad y el rebalanceo mensual.
+Orquesta la inteligencia departamental, el Comité de Inversión (CIO) y el rebalanceo mensual.
 """
 
 from typing import Dict, Any, List
@@ -13,6 +13,7 @@ from sharky.risk_governor import RiskGovernor
 from sharky.claude_client import ClaudeBrainClient
 from sharky.rebalance_engine import MonthlyRebalanceEngine
 from sharky.opportunity_detector import OpportunityDetector
+from sharky.firm_committee import InvestmentCommittee
 from sharky.models import HealthStatus, VitalState, MarketSnapshot, OpportunityAlert
 
 
@@ -24,10 +25,11 @@ class SharkyAgent:
         self.claude = ClaudeBrainClient()
         self.rebalancer = MonthlyRebalanceEngine()
         self.detector = OpportunityDetector()
+        self.committee = InvestmentCommittee()
 
     def run_daily_cycle(self, watchlist: List[str] = CORE_WATCHLIST) -> Dict[str, Any]:
         """
-        Ejecuta el ciclo diario de Sharky:
+        Ejecuta el ciclo diario de vigilancia e inteligencia departamental:
         - Obtiene precios de mercado y variables macroeconómicas.
         - Monitorea tesis activas para asegurar que ninguna viole su Stop Loss de emergencia.
         - Escanea el mercado en busca de OPORTUNIDADES ASIMÉTRICAS de alta convicción.
@@ -75,8 +77,7 @@ class SharkyAgent:
         new_alerts = self.detector.scan_for_opportunities(snapshots, existing_tickers)
         alerts_created = []
         for alert in new_alerts:
-            # Guardar la alerta en la bóveda de Obsidian si no existe
-            alert_path = self.vault.write_opportunity_alert(alert)
+            self.vault.write_opportunity_alert(alert)
             alerts_created.append(alert)
 
         # 5. Calcular nueva salud y energía metabólica
@@ -122,6 +123,20 @@ class SharkyAgent:
             "alertas_nuevas": [a.dict() for a in alerts_created],
             "alertas_stop_loss": stop_loss_warnings,
         }
+
+    def run_investment_committee(self) -> Dict[str, Any]:
+        """Convoca una sesión plenaria de todos los departamentos de la firma."""
+        current_health = self.vault.read_health_status()
+        theses = self.vault.list_active_theses()
+        snapshots = self.market.get_batch_snapshots(CORE_WATCHLIST)
+        macro_snapshots = self.market.get_macro_overview()
+
+        return self.committee.convene_session(
+            health=current_health,
+            market_snapshots=snapshots,
+            macro_snapshots=macro_snapshots,
+            theses_count=len(theses),
+        )
 
     def generate_monthly_rebalance(self) -> Dict[str, Any]:
         """Fuerza la generación de la propuesta de rebalanceo mensual de cartera (Día 1)."""
