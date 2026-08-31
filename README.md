@@ -9,7 +9,7 @@
 Sharky combina disciplina institucional para evitar la sobreoperación con un **radar proactivo de oportunidades asimétricas**:
 
 1. **Vigilancia e Inteligencia Diaria (Días 2 al 31):**
-   * **Monitoreo Continuo:** Rastrea macroeconomía (`[[Regimen_Macroeconomico]]`), geopolítica y cadenas de suministro (`[[Geopolitica_Global]]`), inercias de mercado y sesgos colectivos (`[[Sentimiento_E_Inercias]]`).
+   * **Monitoreo Continuo (24/7):** Rastrea macroeconomía (`[[Regimen_Macroeconomico]]`), geopolítica y cadenas de suministro (`[[Geopolitica_Global]]`), inercias de mercado y sesgos colectivos (`[[Sentimiento_E_Inercias]]`).
    * **Actualización del Grafo:** Redacta cada día en su diario (`[[05_Diario_Reflexion]]`) y ajusta las fichas de empresas y sectores en Obsidian.
    * **🚨 Radar de Oportunidades Asimétricas:** Cuando detecta un activo con convicción extrema ($\ge 8/10$) y ratio $R:R \ge 3:1$, emite una **Alerta de Oportunidad** inmediata en `[[09_Alertas_Oportunidades]]`.
    * **Cortafuegos de Stop-Loss:** Solo liquida posiciones intrames si tocan su nivel de stop loss innegociable.
@@ -59,82 +59,76 @@ vault/
 
 ---
 
-## 🚀 4. Puesta en Marcha (Modo Simulación)
+## 🍓 4. Despliegue 24/7 en Raspberry Pi / Servidor / Docker
 
-Durante los primeros días puedes dejar a Sharky en **Modo Simulación** para observar cómo analiza el mercado, emite alertas y actualiza tu bóveda sin arriesgar capital real:
+Sharky consume menos de **100 MB de memoria RAM** y prácticamente **0% de CPU en reposo**, por lo que es perfecto para funcionar siempre encendido en una **Raspberry Pi (3, 4 o 5)**, Mini PC o servidor local.
 
-### 1. Clonar el repositorio y acceder a la carpeta
+### Cadencia Inteligente del Planificador 24/7 (`SharkyScheduler`):
+* **Cada 60 minutos:** Escaneo silencioso de cotizaciones, verificación de Stop Loss de emergencia y radar de oportunidades.
+* **Cada día a las 22:00 CET:** Cierre diario de mercado, síntesis de noticias, reflexión con Claude y actualización del diario.
+* **Día 1 de cada mes a las 08:00:** Generación automática de la propuesta maestra de compras y ventas.
+
+### Opción A: Instalación Automática en Raspberry Pi / Linux
+Clona el repositorio en tu Raspberry Pi y ejecuta el script de instalación:
 ```bash
 git clone https://github.com/alejandromarquesrisso99-arch/Sharky.git
 cd Sharky
+chmod +x scripts/deploy_raspberry.sh
+./scripts/deploy_raspberry.sh
 ```
+*Sharky se registrará como un servicio de `systemd` que arrancará automáticamente cada vez que enciendas la Raspberry Pi.*
 
-### 2. Crear un entorno virtual e instalar dependencias
+* **Ver estado:** `sudo systemctl status sharky`
+* **Ver logs en vivo:** `journalctl -u sharky -f`
+
+### Opción B: Despliegue con Docker Compose
 ```bash
-python -m venv .venv
-
-# En Windows (PowerShell):
-.venv\Scripts\Activate.ps1
-
-# En Linux / macOS:
-source .venv/bin/activate
-
-# Instalar dependencias
-pip install -r requirements.txt
+docker compose up -d
 ```
 
-### 3. Configurar variables de entorno
-Copia la plantilla `.env.example` a un archivo `.env`:
+### Opción C: Ejecutar como Servicio en Windows / Mac / Linux
 ```bash
-cp .env.example .env
+python -m sharky.cli service --interval 60
 ```
-*(Si dejas `ANTHROPIC_API_KEY` vacía o por defecto, Sharky operará en su simulador local sin coste de tokens ni errores).*
 
 ---
 
-## 💻 5. Comandos de la CLI
+## 📱 5. Cómo ver las notas en tu Móvil u Ordenador en tiempo real
 
-### 📊 Consultar el Estado Vital, Salud y Alertas Activas
+Como la Raspberry Pi o servidor actualiza los archivos Markdown en la carpeta `vault/`, puedes sincronizarla con tus dispositivos:
+1. **Obsidian Sync:** La forma oficial y más sencilla.
+2. **Git Sync (Plugin de Obsidian):** Sincronización automática gratuita con tu repositorio de GitHub.
+3. **Syncthing:** Sincronización P2P gratuita y continua entre la Raspberry Pi, tu PC y tu teléfono móvil.
+
+---
+
+## 💻 6. Comandos de la CLI
+
 ```bash
+# Ver estado vital, salud y alertas activas
 python -m sharky.cli status
-```
 
-### 🚨 Ver las Oportunidades Asimétricas de Alta Convicción
-```bash
+# Ver las oportunidades asimétricas de alta convicción detectadas
 python -m sharky.cli alerts
-```
 
-### 🛰️ Ejecutar la Vigilancia Diaria (Macro, Noticias, Alertas y Diario)
-```bash
+# Ejecutar manualmente la vigilancia diaria
 python -m sharky.cli daily
-# o también:
-python -m sharky.cli cycle
-```
 
-### 📅 Generar la Propuesta de Rebalanceo del Día 1 (Compras y Ventas)
-Calcula las ponderaciones objetivo, reserva de liquidez y qué activos comprar/vender:
-```bash
+# Generar manualmente la propuesta de rebalanceo del Día 1
 python -m sharky.cli monthly
-# o también:
-python -m sharky.cli rebalance
-```
 
-### 🌐 Ver el Termómetro Macroeconómico (SPY, QQQ, Bonos TLT, Oro GLD, Petróleo USO)
-```bash
+# Ver el termómetro macroeconómico (SPY, QQQ, TLT, GLD, USO)
 python -m sharky.cli macro
-```
 
-### 🔄 Modo Daemon en Segundo Plano
-Ejecuta la vigilancia y escaneo de oportunidades de forma continua:
-```bash
-python -m sharky.cli daemon --interval 60
+# Iniciar el servicio continuo 24/7
+python -m sharky.cli service --interval 60
 ```
 
 ---
 
-## 🔌 6. Conectar Claude (Anthropic API) para Dinero Real
+## 🔌 7. Conectar Claude (Anthropic API)
 
-Cuando decidas pasar de simulación a producción real, edita tu archivo `.env`:
+Por defecto funciona en **Modo Simulación**. Para activar el razonamiento en vivo con Claude, edita tu archivo `.env`:
 ```env
 ANTHROPIC_API_KEY=sk-ant-api03-...
 CLAUDE_MODEL=claude-3-7-sonnet-20250219

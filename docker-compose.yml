@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  sharky:
+    build: .
+    container_name: sharky-brain
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Montar la bóveda en el host para poder abrirla con Obsidian en tiempo real
+      - ./vault:/app/vault
+    environment:
+      - SHARKY_VAULT_PATH=/app/vault
+      - PYTHONUNBUFFERED=1

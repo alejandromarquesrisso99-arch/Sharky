@@ -1,6 +1,6 @@
 """
 Interfaz de Línea de Comandos (CLI) de Sharky.
-Permite visualizar el estado vital, ejecutar la vigilancia diaria, ver alertas de oportunidad y rebalanceos.
+Permite visualizar el estado vital, ejecutar la vigilancia diaria, ver alertas de oportunidad y servicio 24/7.
 """
 
 import argparse
@@ -9,6 +9,7 @@ import time
 from datetime import datetime
 
 from sharky.agent_loop import SharkyAgent
+from sharky.scheduler import SharkyScheduler
 from sharky.config import DEFAULT_WATCHLIST, VAULT_PATH, ANTHROPIC_API_KEY
 from sharky.market_data import CORE_WATCHLIST, MACRO_TICKERS
 from sharky.models import VitalState
@@ -23,7 +24,7 @@ def print_banner():
   ███████║██║  ██║██║  ██║██║  ██║██║  ██╗   ██║   
   ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   
     Cerebro Digital de Inversión & Supervivencia
-    Radar de Oportunidades & Asignación Mensual
+    Modo Autónomo 24/7 para Raspberry Pi / Servidor
     """)
 
 
@@ -129,22 +130,15 @@ def cmd_macro(agent: SharkyAgent):
     print("-" * 65)
 
 
-def cmd_daemon(agent: SharkyAgent, interval_minutes: int = 60):
+def cmd_service(interval_minutes: int = 60):
     print_banner()
-    print(f"[Sharky] 🔄 Modo Daemon de vigilancia continua iniciado ({interval_minutes} min).")
-    print("[Sharky] Presiona Ctrl+C para pausar.\n")
-    try:
-        while True:
-            cmd_cycle(agent)
-            print(f"[Sharky] Próxima comprobación en {interval_minutes} minutos...\n")
-            time.sleep(interval_minutes * 60)
-    except KeyboardInterrupt:
-        print("\n[Sharky] 🛑 Daemon detenido. El estado del cerebro se mantiene guardado en Obsidian.")
+    scheduler = SharkyScheduler(check_interval_minutes=interval_minutes)
+    scheduler.start()
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Sharky: Cerebro de Inversión, Radar de Oportunidades y Rebalanceo Mensual"
+        description="Sharky: Cerebro de Inversión, Radar de Oportunidades y Rebalanceo Mensual 24/7"
     )
     subparsers = parser.add_subparsers(dest="command", help="Comandos disponibles")
 
@@ -165,14 +159,15 @@ def main():
     # Comando macro
     subparsers.add_parser("macro", help="Muestra los indicadores macroeconómicos clave (SPY, QQQ, TLT, GLD, USO)")
 
-    # Comando daemon
-    daemon_parser = subparsers.add_parser("daemon", help="Ejecuta el agente de forma continua en segundo plano")
-    daemon_parser.add_argument(
+    # Comando service / daemon (24/7)
+    service_parser = subparsers.add_parser("service", help="Ejecuta el servicio autónomo 24/7 (Scheduler inteligente)")
+    service_parser.add_argument(
         "--interval",
         type=int,
         default=60,
-        help="Intervalo entre ciclos en minutos (por defecto: 60)",
+        help="Intervalo de comprobación horaria en minutos (por defecto: 60)",
     )
+    subparsers.add_parser("daemon", help="Alias para service")
 
     args = parser.parse_args()
     agent = SharkyAgent()
@@ -187,8 +182,9 @@ def main():
         cmd_monthly(agent)
     elif args.command == "macro":
         cmd_macro(agent)
-    elif args.command == "daemon":
-        cmd_daemon(agent, interval_minutes=args.interval)
+    elif args.command in ("service", "daemon"):
+        interval = getattr(args, "interval", 60)
+        cmd_service(interval_minutes=interval)
     else:
         parser.print_help()
 

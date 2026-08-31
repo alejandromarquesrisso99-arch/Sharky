@@ -1,0 +1,17 @@
+[Unit]
+Description=Sharky - Cerebro Digital Autonomo de Inversion 24/7
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/Sharky
+ExecStart=/home/pi/Sharky/.venv/bin/python -m sharky.cli service --interval 60
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
