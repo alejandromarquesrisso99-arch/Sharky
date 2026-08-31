@@ -4,15 +4,15 @@
 
 ---
 
-## 🎯 1. Filosofía de Inversión: Asignación Mensual + Vigilancia Diaria
+## 🎯 1. Filosofía de Inversión: Asignación Mensual + Radar de Oportunidades
 
-Sharky está diseñado para **evitar el ruido y los impulsos destructivos del day-trading**:
+Sharky combina disciplina institucional para evitar la sobreoperación con un **radar proactivo de oportunidades asimétricas**:
 
 1. **Vigilancia e Inteligencia Diaria (Días 2 al 31):**
    * **Monitoreo Continuo:** Rastrea macroeconomía (`[[Regimen_Macroeconomico]]`), geopolítica y cadenas de suministro (`[[Geopolitica_Global]]`), inercias de mercado y sesgos colectivos (`[[Sentimiento_E_Inercias]]`).
    * **Actualización del Grafo:** Redacta cada día en su diario (`[[05_Diario_Reflexion]]`) y ajusta las fichas de empresas y sectores en Obsidian.
-   * **Cero Sobreoperación:** No compra ni vende de forma impulsiva a mitad de mes.
-   * **Cortafuegos de Stop-Loss:** Solo ejecuta una salida de emergencia si un activo quiebra su nivel de stop loss innegociable.
+   * **🚨 Radar de Oportunidades Asimétricas:** Cuando detecta un activo con convicción extrema ($\ge 8/10$) y ratio $R:R \ge 3:1$, emite una **Alerta de Oportunidad** inmediata en `[[09_Alertas_Oportunidades]]`.
+   * **Cortafuegos de Stop-Loss:** Solo liquida posiciones intrames si tocan su nivel de stop loss innegociable.
 
 2. **El Gran Rebalanceo Mensual (Día 1 de cada Mes):**
    * Sintetiza toda la evidencia acumulada durante el mes.
@@ -41,7 +41,7 @@ Abre la carpeta `vault/` directamente en la aplicación de escritorio de **Obsid
 vault/
 ├── 00_Sistema/                          # Axiomas inmutables, fórmulas de riesgo y Dashboard
 │   ├── Reglas_De_Supervivencia.md
-│   ├── Estado_Vital.md                  # Dashboard de salud, capital y PnL en tiempo real
+│   ├── Estado_Vital.md                  # Dashboard de salud, capital, PnL y alertas activas
 │   └── Prompt_Sistema.md
 ├── 01_Tesis_Activas/                    # Tesis abiertas con frontmatter YAML
 ├── 02_Tesis_Cerradas/                   # Histórico de operaciones cerradas
@@ -52,15 +52,16 @@ vault/
 ├── 04_Operaciones_Bitacora/             # Registro cronológico de órdenes ejecutadas
 ├── 05_Diario_Reflexion/                 # Entradas diarias de inteligencia y autocrítica
 ├── 06_Lecciones_Aprendidas/             # Heurísticas generadas tras auditorías
-├── 07_Plantillas/                       # Plantillas para tesis, empresas, diarios y rebalanceos
-└── 08_Rebalanceos_Mensuales/            # Informes de rebalanceo emitidos el día 1 de cada mes
+├── 07_Plantillas/                       # Plantillas para tesis, empresas, diarios, rebalanceos y alertas
+├── 08_Rebalanceos_Mensuales/            # Informes de rebalanceo emitidos el día 1 de cada mes
+└── 09_Alertas_Oportunidades/            # 🚨 Alertas de oportunidades asimétricas detectadas
 ```
 
 ---
 
 ## 🚀 4. Puesta en Marcha (Modo Simulación)
 
-Durante los primeros días puedes dejar a Sharky en **Modo Simulación** para observar cómo analiza el mercado y actualiza tu bóveda sin arriesgar capital real:
+Durante los primeros días puedes dejar a Sharky en **Modo Simulación** para observar cómo analiza el mercado, emite alertas y actualiza tu bóveda sin arriesgar capital real:
 
 ### 1. Clonar el repositorio y acceder a la carpeta
 ```bash
@@ -93,12 +94,17 @@ cp .env.example .env
 
 ## 💻 5. Comandos de la CLI
 
-### 📊 Consultar el Estado Vital y Salud
+### 📊 Consultar el Estado Vital, Salud y Alertas Activas
 ```bash
 python -m sharky.cli status
 ```
 
-### 🛰️ Ejecutar la Vigilancia Diaria (Macro, Noticias, Stop-Loss y Diario)
+### 🚨 Ver las Oportunidades Asimétricas de Alta Convicción
+```bash
+python -m sharky.cli alerts
+```
+
+### 🛰️ Ejecutar la Vigilancia Diaria (Macro, Noticias, Alertas y Diario)
 ```bash
 python -m sharky.cli daily
 # o también:
@@ -119,7 +125,7 @@ python -m sharky.cli macro
 ```
 
 ### 🔄 Modo Daemon en Segundo Plano
-Ejecuta la vigilancia de forma periódica continua (por ejemplo cada 60 minutos):
+Ejecuta la vigilancia y escaneo de oportunidades de forma continua:
 ```bash
 python -m sharky.cli daemon --interval 60
 ```

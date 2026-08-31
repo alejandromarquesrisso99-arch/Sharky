@@ -1,6 +1,6 @@
 """
 Gestor de la Bóveda de Obsidian.
-Lee, escribe y sincroniza notas en Markdown con metadatos YAML y enlaces de grafo.
+Lee, escribe y sincroniza notas en Markdown con metadatos YAML, enlaces de grafo y alertas.
 """
 
 from pathlib import Path
@@ -17,6 +17,8 @@ from sharky.models import (
     VitalState,
     MonthlyRebalanceReport,
     RebalanceAction,
+    OpportunityAlert,
+    AlertStatus,
 )
 
 
@@ -39,6 +41,7 @@ class VaultManager:
             "06_Lecciones_Aprendidas",
             "07_Plantillas",
             "08_Rebalanceos_Mensuales",
+            "09_Alertas_Oportunidades",
         ]
         for d in subdirs:
             (self.vault_path / d).mkdir(parents=True, exist_ok=True)
@@ -74,6 +77,7 @@ class VaultManager:
         metadata, _ = self.parse_markdown(content)
         
         try:
+            active_alerts = len(self.list_active_alerts())
             return HealthStatus(
                 estado_vital=VitalState(metadata.get("estado_vital", "OPTIMO")),
                 salud_porcentaje=float(metadata.get("salud_porcentaje", 100.0)),
@@ -86,6 +90,7 @@ class VaultManager:
                 operaciones_ganadoras=int(metadata.get("operaciones_ganadoras", 0)),
                 operaciones_perdedoras=int(metadata.get("operaciones_perdedoras", 0)),
                 win_rate_pct=float(metadata.get("win_rate_pct", 0.0)),
+                alertas_activas_count=active_alerts,
                 ultima_actualizacion=datetime.now()
             )
         except Exception:
@@ -94,6 +99,7 @@ class VaultManager:
     def update_health_status(self, health: HealthStatus, extra_summary: str = "") -> None:
         """Actualiza el archivo Estado_Vital.md en la bóveda."""
         file_path = self.vault_path / "00_Sistema" / "Estado_Vital.md"
+        active_alerts = self.list_active_alerts()
         
         metadata = {
             "tipo": "dashboard",
@@ -108,10 +114,19 @@ class VaultManager:
             "operaciones_ganadoras": health.operaciones_ganadoras,
             "operaciones_perdedoras": health.operaciones_perdedoras,
             "win_rate_pct": round(health.win_rate_pct, 2),
+            "alertas_activas_count": len(active_alerts),
             "ultima_actualizacion": datetime.now().isoformat()
         }
 
         icon = "🟢" if health.estado_vital == VitalState.OPTIMO else ("🟡" if health.estado_vital == VitalState.ALERTA else ("🔴" if health.estado_vital == VitalState.CUIDADOS_INTENSIVOS else "💀"))
+
+        alerts_section = ""
+        if active_alerts:
+            alerts_lines = [
+                f"- 🚨 **[[{a.ticker}]]** ({a.empresa}) | Convicción: `{a.conviccion}/10` | R:R: `{a.ratio_rr}:1` | Potencial: `+{a.potencial_ganancia_pct}%`"
+                for _, a in active_alerts
+            ]
+            alerts_section = "\n\n### 🚨 Oportunidades de Alta Convicción Detectadas\n" + "\n".join(alerts_lines)
 
         body = f"""# 🫀 ESTADO VITAL DE SHARKY
 
@@ -132,6 +147,7 @@ class VaultManager:
 | **PnL Acumulado ($ / %)** | `{'+' if health.pnl_total_usd >= 0 else ''}${health.pnl_total_usd:,.2f} ({'+' if health.pnl_total_pct >= 0 else ''}{health.pnl_total_pct:.2f}%)` | - |
 | **Drawdown Máximo Registrado** | `{health.drawdown_maximo_pct:.2f}%` | `> 15.00%` |
 | **Tasa de Acierto (Win Rate)** | `{health.win_rate_pct:.1f}% ({health.operaciones_ganadoras}/{health.operaciones_ganadoras + health.operaciones_perdedoras})` | `< 40.0%` con R/R 1:1 |
+| **Alertas de Oportunidad** | `🔥 {len(active_alerts)} activas` | `[[09_Alertas_Oportunidades]]` |
 
 ---
 
@@ -140,6 +156,7 @@ class VaultManager:
 * **Bóveda de Obsidian:** Conectada y sincronizada (`vault/`)
 * **Proveedor de IA:** Preparado para Claude 3.7 Sonnet / Claude Opus
 * **Última Actualización:** `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`
+{alerts_section}
 {extra_summary}
 """
         content = self.build_markdown(metadata, body)
@@ -176,6 +193,111 @@ class VaultManager:
                 print(f"[VaultManager] Error parseando tesis {file.name}: {e}")
         return theses
 
+    def list_active_alerts(self) -> List[Tuple[Path, OpportunityAlert]]:
+        """Devuelve todas las alertas activas en 09_Alertas_Oportunidades/."""
+        alerts_dir = self.vault_path / "09_Alertas_Oportunidades"
+        active = []
+        for file in alerts_dir.glob("*.md"):
+            content = file.read_text(encoding="utf-8")
+            meta, body = self.parse_markdown(content)
+            if not meta or meta.get("estado") != "ACTIVA":
+                continue
+            try:
+                alert = OpportunityAlert(
+                    id_alerta=meta.get("id_alerta", file.stem),
+                    ticker=meta.get("ticker", ""),
+                    empresa=meta.get("empresa", ""),
+                    fecha_deteccion=str(meta.get("fecha_deteccion", "")),
+                    conviccion=int(meta.get("conviccion", 8)),
+                    precio_actual=float(meta.get("precio_actual", 0.0)),
+                    entrada_sugerida=float(meta.get("entrada_sugerida", 0.0)),
+                    stop_loss=float(meta.get("stop_loss", 0.0)),
+                    target_precio=float(meta.get("target_precio", 0.0)),
+                    ratio_rr=float(meta.get("ratio_rr", 3.0)),
+                    potencial_ganancia_pct=float(meta.get("potencial_ganancia_pct", 20.0)),
+                    riesgo_maximo_pct=float(meta.get("riesgo_maximo_pct", 7.0)),
+                    descripcion_oportunidad=body,
+                    pct_max_cartera=float(meta.get("pct_max_cartera", 8.0)),
+                    estado=AlertStatus(meta.get("estado", "ACTIVA")),
+                )
+                active.append((file, alert))
+            except Exception as e:
+                pass
+        return active
+
+    def write_opportunity_alert(self, alert: OpportunityAlert) -> Path:
+        """Crea una nota de alerta de oportunidad en 09_Alertas_Oportunidades/."""
+        filename = f"{alert.fecha_deteccion}_ALERTA_{alert.ticker}_{alert.id_alerta}.md"
+        file_path = self.vault_path / "09_Alertas_Oportunidades" / filename
+
+        meta = {
+            "tipo": "alerta_oportunidad",
+            "id_alerta": alert.id_alerta,
+            "ticker": alert.ticker,
+            "empresa": alert.empresa,
+            "fecha_deteccion": alert.fecha_deteccion,
+            "conviccion": alert.conviccion,
+            "precio_actual": alert.precio_actual,
+            "entrada_sugerida": alert.entrada_sugerida,
+            "stop_loss": alert.stop_loss,
+            "target_precio": alert.target_precio,
+            "ratio_rr": alert.ratio_rr,
+            "potencial_ganancia_pct": alert.potencial_ganancia_pct,
+            "riesgo_maximo_pct": alert.riesgo_maximo_pct,
+            "pct_max_cartera": alert.pct_max_cartera,
+            "estado": alert.estado.value,
+        }
+
+        cat_str = "\n".join([f"{i+1}. **{c}**" for i, c in enumerate(alert.catalizadores)]) if alert.catalizadores else "- Pendiente de catalizador."
+        riesgos_str = "\n".join([f"* {r}" for r in alert.riesgos]) if alert.riesgos else "- Riesgos generales de mercado."
+
+        body = f"""# 🚨 ALERTA DE ALTA CONVICCIÓN: {alert.empresa} ({alert.ticker})
+
+> [!WARNING]
+> **OPORTUNIDAD ASIMÉTRICA DETECTADA**  
+> **Fecha:** {alert.fecha_deteccion} | **Convicción:** `{alert.conviccion}/10` | **Ratio R:R:** `{alert.ratio_rr:.2f} : 1`  
+> **Potencial Estimado:** `+{alert.potencial_ganancia_pct:.1f}%` frente a un riesgo controlado de `-{alert.riesgo_maximo_pct:.1f}%`.
+
+---
+
+## 💎 1. ¿Por qué es una Oportunidad Extraordinaria? (Tesis Rápida)
+
+{alert.descripcion_oportunidad}
+
+---
+
+## ⚡ 2. Catalizadores Inmediatos
+
+{cat_str}
+
+---
+
+## 🎯 3. Plan de Entrada y Protección
+
+| Parámetro | Valor Sugerido | Justificación Técnica / Fundamental |
+| :--- | :--- | :--- |
+| **Precio Actual** | `${alert.precio_actual:,.2f}` | Cotización de mercado en momento de alerta |
+| **Zona de Entrada Ideal** | `${alert.entrada_sugerida:,.2f}` | Punto óptimo de entrada con bajo riesgo |
+| **Stop Loss Innegociable** | `${alert.stop_loss:,.2f}` | Invalidación total de la hipótesis (-{alert.riesgo_maximo_pct:.1f}%) |
+| **Target Objetivo (T1)** | `${alert.target_precio:,.2f}` | Toma de beneficios (+{alert.potencial_ganancia_pct:.1f}%) |
+| **Ponderación Máxima Cartera** | `{alert.pct_max_cartera:.1f}%` | Respetando `[[Reglas_De_Supervivencia]]` |
+
+---
+
+## ⚠️ 4. Riesgos Críticos y Puntos Ciegos
+
+{riesgos_str}
+
+---
+
+## 📌 5. Acción Recomendada
+
+* [ ] Evaluar inclusión en la cartera para el próximo **Rebalanceo Mensual** (`[[08_Rebalanceos_Mensuales]]`) o apertura táctica con reserva de liquidez.
+"""
+        content = self.build_markdown(meta, body)
+        file_path.write_text(content, encoding="utf-8")
+        return file_path
+
     def write_monthly_rebalance_report(self, report: MonthlyRebalanceReport) -> Path:
         """Crea el informe de rebalanceo mensual en 08_Rebalanceos_Mensuales/."""
         filename = f"{report.fecha}_Rebalanceo_{report.mes_ano.replace(' ', '_')}.md"
@@ -190,7 +312,6 @@ class VaultManager:
             "capital_total_usd": report.capital_total_usd,
         }
 
-        # Tablas de compras y ventas
         compras_rows = []
         ventas_rows = []
         cartera_rows = []
@@ -312,7 +433,7 @@ Renta Variable / Activos    : {pct_equity:.1f}% (${equity_usd:,.2f})
 
 ## 3. Disciplina Operativa
 
-Durante el mes no se realizan operaciones por impulso. Toda la evidencia y datos acumulados se canalizan hacia el **Rebalanceo del Día 1** (`[[08_Rebalanceos_Mensuales]]`).
+Durante el mes no se realizan operaciones por impulso. Toda la evidencia y datos acumulados se canalizan hacia el **Rebalanceo del Día 1** (`[[08_Rebalanceos_Mensuales]]`) y las **Alertas de Oportunidad** (`[[09_Alertas_Oportunidades]]`).
 """
         content = self.build_markdown(meta, body)
         file_path.write_text(content, encoding="utf-8")

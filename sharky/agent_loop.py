@@ -1,6 +1,6 @@
 """
 Bucle de ejecución y ciclos cognitivos de Sharky.
-Orquesta la inteligencia diaria (macro, noticias, inercias) y el rebalanceo mensual (Día 1).
+Orquesta la inteligencia diaria, la detección de alertas de oportunidad y el rebalanceo mensual.
 """
 
 from typing import Dict, Any, List
@@ -12,7 +12,8 @@ from sharky.market_data import MarketDataProvider, CORE_WATCHLIST
 from sharky.risk_governor import RiskGovernor
 from sharky.claude_client import ClaudeBrainClient
 from sharky.rebalance_engine import MonthlyRebalanceEngine
-from sharky.models import HealthStatus, VitalState, MarketSnapshot
+from sharky.opportunity_detector import OpportunityDetector
+from sharky.models import HealthStatus, VitalState, MarketSnapshot, OpportunityAlert
 
 
 class SharkyAgent:
@@ -22,12 +23,14 @@ class SharkyAgent:
         self.risk = RiskGovernor()
         self.claude = ClaudeBrainClient()
         self.rebalancer = MonthlyRebalanceEngine()
+        self.detector = OpportunityDetector()
 
     def run_daily_cycle(self, watchlist: List[str] = CORE_WATCHLIST) -> Dict[str, Any]:
         """
         Ejecuta el ciclo diario de Sharky:
         - Obtiene precios de mercado y variables macroeconómicas.
         - Monitorea tesis activas para asegurar que ninguna viole su Stop Loss de emergencia.
+        - Escanea el mercado en busca de OPORTUNIDADES ASIMÉTRICAS de alta convicción.
         - Si hoy es Día 1 de mes, genera automáticamente el informe de Rebalanceo Mensual.
         - Redacta el diario de reflexión macro e inteligencia en Obsidian.
         - Actualiza el cuadro de mandos Estado_Vital.md.
@@ -47,6 +50,7 @@ class SharkyAgent:
         total_pnl_usd = 0.0
         evaluation_notes = []
         stop_loss_warnings = []
+        existing_tickers = [t.ticker for _, t in theses]
 
         for path, thesis in theses:
             snap = snapshots.get(thesis.ticker)
@@ -67,16 +71,24 @@ class SharkyAgent:
                 f"- **{thesis.ticker}:** Entrada: ${thesis.precio_entrada:,.2f} | Actual: ${snap.precio_actual:,.2f} | PnL: {pnl_tesis:+,.2f} USD"
             )
 
-        # 4. Calcular nueva salud y energía metabólica
+        # 4. Escaneo de Oportunidades Asimétricas de Alta Convicción
+        new_alerts = self.detector.scan_for_opportunities(snapshots, existing_tickers)
+        alerts_created = []
+        for alert in new_alerts:
+            # Guardar la alerta en la bóveda de Obsidian si no existe
+            alert_path = self.vault.write_opportunity_alert(alert)
+            alerts_created.append(alert)
+
+        # 5. Calcular nueva salud y energía metabólica
         new_health = self.risk.calculate_health(current_health, total_pnl_usd)
 
-        # 5. Si hoy es el Día 1 del mes, generar el Rebalanceo Mensual
+        # 6. Si hoy es el Día 1 del mes, generar el Rebalanceo Mensual
         monthly_report_path = None
         if now.day == 1:
             report = self.rebalancer.generate_monthly_plan(new_health, theses, snapshots)
             monthly_report_path = self.vault.write_monthly_rebalance_report(report)
 
-        # 6. Generar reflexión diaria de inteligencia con Claude
+        # 7. Generar reflexión diaria de inteligencia con Claude
         intelligence_text = self.claude.generate_daily_intelligence(
             health=new_health,
             market_snapshots=snapshots,
@@ -84,7 +96,7 @@ class SharkyAgent:
             active_theses_count=len(theses),
         )
 
-        # 7. Actualizar Obsidian
+        # 8. Actualizar Obsidian
         extra_summary = "\n\n### 🎯 Rendimiento de Tesis en Cartera\n" + "\n".join(evaluation_notes)
         if stop_loss_warnings:
             extra_summary += "\n\n" + "\n".join(stop_loss_warnings)
@@ -94,7 +106,7 @@ class SharkyAgent:
             date_str=date_str,
             summary=intelligence_text,
             health=new_health,
-            events=f"Vigilancia diaria completada. {len(theses)} posición(es) en cartera.",
+            events=f"Vigilancia diaria completada. {len(theses)} posición(es) activas. {len(alerts_created)} alerta(s) de oportunidad.",
         )
 
         return {
@@ -107,6 +119,7 @@ class SharkyAgent:
             "diario_guardado": str(journal_path),
             "rebalanceo_generado": str(monthly_report_path) if monthly_report_path else None,
             "tesis_activas": len(theses),
+            "alertas_nuevas": [a.dict() for a in alerts_created],
             "alertas_stop_loss": stop_loss_warnings,
         }
 
@@ -128,6 +141,10 @@ class SharkyAgent:
             "num_propuestas": len(report.propuestas),
             "propuestas": [p.dict() for p in report.propuestas],
         }
+
+    def get_active_alerts(self) -> List[OpportunityAlert]:
+        """Devuelve todas las alertas de alta convicción activas en Obsidian."""
+        return [alert for _, alert in self.vault.list_active_alerts()]
 
     def get_status_summary(self) -> HealthStatus:
         """Devuelve el estado vital actual del agente."""

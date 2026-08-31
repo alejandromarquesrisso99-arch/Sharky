@@ -28,6 +28,13 @@ class RebalanceAction(str, Enum):
     INCREMENTAR = "INCREMENTAR"
 
 
+class AlertStatus(str, Enum):
+    ACTIVA = "ACTIVA"
+    EJECUTADA = "EJECUTADA"
+    DESCARTADA = "DESCARTADA"
+    EXPIRADA = "EXPIRADA"
+
+
 class OrderStatus(str, Enum):
     ABIERTA = "ABIERTA"
     CERRADA = "CERRADA"
@@ -51,7 +58,28 @@ class HealthStatus(BaseModel):
     operaciones_ganadoras: int = 0
     operaciones_perdedoras: int = 0
     win_rate_pct: float = 0.0
+    alertas_activas_count: int = 0
     ultima_actualizacion: datetime = Field(default_factory=datetime.now)
+
+
+class OpportunityAlert(BaseModel):
+    id_alerta: str
+    ticker: str
+    empresa: str
+    fecha_deteccion: str
+    conviccion: int = Field(default=8, ge=1, le=10)
+    precio_actual: float
+    entrada_sugerida: float
+    stop_loss: float
+    target_precio: float
+    ratio_rr: float
+    potencial_ganancia_pct: float
+    riesgo_maximo_pct: float
+    descripcion_oportunidad: str
+    catalizadores: List[str] = Field(default_factory=list)
+    riesgos: List[str] = Field(default_factory=list)
+    pct_max_cartera: float = 8.0
+    estado: AlertStatus = AlertStatus.ACTIVA
 
 
 class InvestmentThesis(BaseModel):

@@ -1,6 +1,6 @@
 """
 Interfaz de Línea de Comandos (CLI) de Sharky.
-Permite visualizar el estado vital, ejecutar la vigilancia diaria y generar la lista de compras/ventas del Día 1.
+Permite visualizar el estado vital, ejecutar la vigilancia diaria, ver alertas de oportunidad y rebalanceos.
 """
 
 import argparse
@@ -23,29 +23,36 @@ def print_banner():
   ███████║██║  ██║██║  ██║██║  ██║██║  ██╗   ██║   
   ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   
     Cerebro Digital de Inversión & Supervivencia
-    Estrategia de Asignación Mensual & Vigilancia Diaria
+    Radar de Oportunidades & Asignación Mensual
     """)
 
 
 def cmd_status(agent: SharkyAgent):
     health = agent.get_status_summary()
+    alerts = agent.get_active_alerts()
     print_banner()
-    print("=" * 65)
+    print("=" * 68)
     print(f"  Bóveda de Obsidian : {VAULT_PATH}")
     has_key = bool(ANTHROPIC_API_KEY and ANTHROPIC_API_KEY != "TU_ANTHROPIC_API_KEY_AQUI")
     print(f"  Motor de IA        : {'Claude (API Conectada)' if has_key else 'Modo Simulación (Sin API Key)'}")
-    print("-" * 65)
+    print("-" * 68)
     print(f"  Estado Vital       : {health.estado_vital.value}")
     print(f"  Salud Digital      : {health.salud_porcentaje:.1f}%")
     print(f"  Energía Metabólica : {health.energia_actual:.1f} / 100.0")
     print(f"  Capital Total      : ${health.capital_actual:,.2f} USD")
     print(f"  PnL Acumulado      : {'+' if health.pnl_total_usd >= 0 else ''}${health.pnl_total_usd:,.2f} ({'+' if health.pnl_total_pct >= 0 else ''}{health.pnl_total_pct:.2f}%)")
     print(f"  Drawdown Máximo    : {health.drawdown_maximo_pct:.2f}%")
-    print("=" * 65)
+    print(f"  Alertas Activas    : 🔥 {len(alerts)} oportunidad(es) de alta convicción")
+    print("=" * 68)
+    if alerts:
+        print("\n🚨 OPORTUNIDADES ACTIVAS EN RADAR:")
+        for a in alerts:
+            print(f"  - [{a.ticker}] {a.empresa} | Convicción: {a.conviccion}/10 | Potencial: +{a.potencial_ganancia_pct:.1f}% (R:R {a.ratio_rr:.2f}:1)")
+        print("  👉 Consulta los detalles en Obsidian: vault/09_Alertas_Oportunidades/\n")
 
 
 def cmd_cycle(agent: SharkyAgent):
-    print("\n[Sharky] 🛰️ Iniciando vigilancia diaria de mercado, macro y geopolítica...")
+    print("\n[Sharky] 🛰️ Iniciando vigilancia diaria de mercado, macro, stop-loss y oportunidades...")
     res = agent.run_daily_cycle()
     print("[Sharky] ✅ Sesión de vigilancia completada.")
     print(f"  - Estado Vital      : {res['estado_vital']}")
@@ -54,12 +61,36 @@ def cmd_cycle(agent: SharkyAgent):
     print(f"  - PnL               : ${res['pnl_total_usd']:+,.2f}")
     print(f"  - Tesis en Cartera  : {res['tesis_activas']}")
     print(f"  - Diario Guardado   : {res['diario_guardado']}")
+    
+    if res.get("alertas_nuevas"):
+        print("\n🚨 ¡NUEVAS OPORTUNIDADES ASIMÉTRICAS DETECTADAS HOY! 🚨")
+        for a in res["alertas_nuevas"]:
+            print(f"  ⭐ [{a['ticker']}] {a['empresa']} | Convicción: {a['conviccion']}/10 | Potencial: +{a['potencial_ganancia_pct']:.1f}% | Stop: ${a['stop_loss']:,.2f}")
+        print("  📁 Guardadas automáticamente en: vault/09_Alertas_Oportunidades/\n")
+
     if res.get("rebalanceo_generado"):
         print(f"  - 📅 ¡REBALANCEO DÍA 1 GENERADO!: {res['rebalanceo_generado']}")
     if res.get("alertas_stop_loss"):
         for a in res["alertas_stop_loss"]:
             print(f"  {a}")
     print()
+
+
+def cmd_alerts(agent: SharkyAgent):
+    alerts = agent.get_active_alerts()
+    print_banner()
+    print(f"\n[Sharky] 🚨 Radar de Oportunidades de Alta Convicción ({len(alerts)} activas)\n")
+    if not alerts:
+        print("No hay alertas activas en este momento. El radar sigue escaneando el mercado.")
+        return
+
+    print("-" * 80)
+    print(f"{'TICKER':<8} | {'EMPRESA':<22} | {'CONV.':<6} | {'PRECIO':<10} | {'TARGET':<10} | {'POTENCIAL':<10} | {'R:R':<6}")
+    print("-" * 80)
+    for a in alerts:
+        print(f"{a.ticker:<8} | {a.empresa[:22]:<22} | {a.conviccion:<6}/10 | ${a.precio_actual:<9,.2f} | ${a.target_precio:<9,.2f} | +{a.potencial_ganancia_pct:<8.1f}% | {a.ratio_rr:<5.2f}")
+    print("-" * 80)
+    print("👉 Revisa el informe y catalizadores completos en Obsidian: vault/09_Alertas_Oportunidades/\n")
 
 
 def cmd_monthly(agent: SharkyAgent):
@@ -113,16 +144,19 @@ def cmd_daemon(agent: SharkyAgent, interval_minutes: int = 60):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Sharky: Cerebro de Inversión y Rebalanceo Mensual con Obsidian y Claude"
+        description="Sharky: Cerebro de Inversión, Radar de Oportunidades y Rebalanceo Mensual"
     )
     subparsers = parser.add_subparsers(dest="command", help="Comandos disponibles")
 
     # Comando status
-    subparsers.add_parser("status", help="Muestra el estado vital actual y métricas de salud")
+    subparsers.add_parser("status", help="Muestra el estado vital actual, salud y alertas activas")
 
     # Comando cycle / daily
-    subparsers.add_parser("cycle", help="Ejecuta la vigilancia diaria de mercado y macro")
-    subparsers.add_parser("daily", help="Alias para cycle")
+    subparsers.add_parser("daily", help="Ejecuta la vigilancia diaria (Macro, Stop-Loss, Alertas y Diario)")
+    subparsers.add_parser("cycle", help="Alias para daily")
+
+    # Comando alerts
+    subparsers.add_parser("alerts", help="Muestra las alertas de oportunidad de alta convicción detectadas")
 
     # Comando monthly / rebalance
     subparsers.add_parser("monthly", help="Genera la propuesta de rebalanceo del Día 1 (qué comprar y qué vender)")
@@ -145,8 +179,10 @@ def main():
 
     if args.command == "status" or args.command is None:
         cmd_status(agent)
-    elif args.command in ("cycle", "daily"):
+    elif args.command in ("daily", "cycle"):
         cmd_cycle(agent)
+    elif args.command == "alerts":
+        cmd_alerts(agent)
     elif args.command in ("monthly", "rebalance"):
         cmd_monthly(agent)
     elif args.command == "macro":
