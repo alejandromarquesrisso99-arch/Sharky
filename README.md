@@ -1,16 +1,16 @@
-# 🦈 Sharky Capital Management: Firma de Inversión Autónoma
+# Sharky Capital Management: Firma de Inversión Autónoma
 
 > **Sharky Capital Management** es un fondo institucional / Family Office digital autónomo dedicado a la gestión estratégica de carteras. Integra una **estructura departamental completa** (Macroeconomía, Análisis Fundamental, Gestión de Riesgo y Psicología de Mercado) conectada a **Obsidian** como memoria de largo plazo y a **Claude** como **Chief Investment Officer (CIO)**.
 
 ---
 
-## 🏛️ 1. Estructura Departamental de la Firma
+## 1. Estructura Departamental de la Firma
 
 Sharky no es un simple bot de trading: opera como una **empresa entera de gestión de activos** con departamentos especializados:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                 👔 COMITÉ DE DIRECCIÓN / CIO (Sharky)                       │
+│                     COMITÉ DE DIRECCIÓN / CIO (Sharky)                      │
 │     - Deliberación estratégica y síntesis ejecutiva                         │
 │     - Aprobación final del Rebalanceo del Día 1                             │
 │     - Salvaguarda de la supervivencia de la firma                           │
@@ -19,7 +19,7 @@ Sharky no es un simple bot de trading: opera como una **empresa entera de gesti�
        ┌───────────────────────────────┼───────────────────────────────┐
        ▼                               ▼                               ▼
 ┌─────────────────────────┐ ┌─────────────────────────┐ ┌─────────────────────────┐
-│ 🌐 DEPARTAMENTO MACRO   │ │ 🔬 ANÁLISIS FUNDAMENTAL │ │ 🛡️ MESA DE RIESGO (CRO) │
+│  DEPARTAMENTO MACRO     │ │   ANÁLISIS FUNDAMENTAL  │ │   MESA DE RIESGO (CRO)  │
 │ - Tipos de interés (TLT)│ │ - Fosos económicos (Moat)│ │ - Control de Drawdowns  │
 │ - Oro y divisas (GLD)   │ │ - ROIC > 15%, Caja Libre │ │ - Stop Loss obligatorio │
 │ - Geopolítica y Cadenas │ │ - Monopolios y pricing   │ │ - Límite máx. 10% activo│
@@ -27,7 +27,7 @@ Sharky no es un simple bot de trading: opera como una **empresa entera de gesti�
                                        │
                                        ▼
                             ┌─────────────────────────┐
-                            │ 🧠 PSICOLOGÍA & FLUJOS  │
+                            │   PSICOLOGÍA & FLUJOS   │
                             │ - Detección de FOMO     │
                             │ - Amplitud de mercado   │
                             │ - Control de sesgos     │
@@ -36,7 +36,7 @@ Sharky no es un simple bot de trading: opera como una **empresa entera de gesti�
 
 ---
 
-## 🗂️ 2. Estructura de la Bóveda Institucional (`vault/`)
+## 2. Estructura de la Bóveda Institucional (`vault/`)
 
 Abre la carpeta `vault/` directamente en **Obsidian** para explorar el cerebro corporativo:
 
@@ -58,12 +58,12 @@ vault/
 ├── 06_Lecciones_Aprendidas/             # Heurísticas generadas tras auditorías internas
 ├── 07_Plantillas/                       # Plantillas para deep dives, tesis y rebalanceos
 ├── 08_Rebalanceos_Mensuales/            # Propuestas maestras de compra/venta del Día 1
-└── 09_Alertas_Oportunidades/            # 🚨 Pitches de oportunidades asimétricas detectadas
+└── 09_Alertas_Oportunidades/            # Pitches de oportunidades asimétricas detectadas
 ```
 
 ---
 
-## 💻 3. Comandos de la CLI
+## 3. Comandos de la CLI
 
 ```bash
 # Ver el estado institucional de la firma y salud del capital
@@ -90,7 +90,7 @@ python -m sharky.cli service --interval 60
 
 ---
 
-## 🍓 4. Despliegue 24/7 en Raspberry Pi / Docker
+## 4. Despliegue 24/7 en Raspberry Pi / Docker
 
 ```bash
 # En Raspberry Pi / Linux (Instalador automático con systemd):
@@ -103,7 +103,7 @@ docker compose up -d
 
 ---
 
-## 🔌 5. Conectar Claude (Anthropic API)
+## 5. Conectar Claude (Anthropic API)
 
 Edita el archivo `.env` para activar a Claude en el rol de **CIO**:
 ```env
@@ -114,6 +114,6 @@ SHARKY_EXECUTION_MODE=REAL
 
 ---
 
-## 📄 Licencia y Autor
+## 6. Licencia y Autor
 
 Desarrollado por **Alejandro Marqués**.
