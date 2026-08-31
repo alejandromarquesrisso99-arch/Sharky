@@ -43,12 +43,13 @@ class SharkyAgent:
         # 1. Leer estado vital actual
         current_health = self.vault.read_health_status()
 
-        # 2. Obtener datos de mercado y macro
-        snapshots = self.market.get_batch_snapshots(watchlist)
+        # 2. Obtener datos de mercado y macro (incluyendo todos los activos en cartera)
+        theses = self.vault.list_active_theses()
+        full_watchlist = list(dict.fromkeys(watchlist + [t.ticker for _, t in theses]))
+        snapshots = self.market.get_batch_snapshots(full_watchlist)
         macro_snapshots = self.market.get_macro_overview()
 
         # 3. Evaluar tesis activas (Supervisión de Stop-Loss intrames)
-        theses = self.vault.list_active_theses()
         total_pnl_usd = 0.0
         evaluation_notes = []
         stop_loss_warnings = []
