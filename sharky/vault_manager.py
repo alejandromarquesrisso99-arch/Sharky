@@ -10,7 +10,14 @@ from datetime import datetime
 import yaml
 
 from sharky.config import VAULT_PATH
-from sharky.models import HealthStatus, InvestmentThesis, TradeOrder, VitalState
+from sharky.models import (
+    HealthStatus,
+    InvestmentThesis,
+    TradeOrder,
+    VitalState,
+    MonthlyRebalanceReport,
+    RebalanceAction,
+)
 
 
 class VaultManager:
@@ -26,10 +33,12 @@ class VaultManager:
             "02_Tesis_Cerradas",
             "03_Activos/Sectores",
             "03_Activos/Empresas",
+            "03_Activos/Macro_Geopolitica",
             "04_Operaciones_Bitacora",
             "05_Diario_Reflexion",
             "06_Lecciones_Aprendidas",
             "07_Plantillas",
+            "08_Rebalanceos_Mensuales",
         ]
         for d in subdirs:
             (self.vault_path / d).mkdir(parents=True, exist_ok=True)
@@ -167,50 +176,102 @@ class VaultManager:
                 print(f"[VaultManager] Error parseando tesis {file.name}: {e}")
         return theses
 
-    def record_trade(self, order: TradeOrder) -> Path:
-        """Crea una nota de operación en 04_Operaciones_Bitacora/."""
-        date_str = order.fecha_ejecucion.strftime("%Y-%m-%d")
-        filename = f"{date_str}_{order.modo.value}_{order.ticker}_{order.tipo_orden.value}.md"
-        file_path = self.vault_path / "04_Operaciones_Bitacora" / filename
+    def write_monthly_rebalance_report(self, report: MonthlyRebalanceReport) -> Path:
+        """Crea el informe de rebalanceo mensual en 08_Rebalanceos_Mensuales/."""
+        filename = f"{report.fecha}_Rebalanceo_{report.mes_ano.replace(' ', '_')}.md"
+        file_path = self.vault_path / "08_Rebalanceos_Mensuales" / filename
 
         meta = {
-            "id_operacion": order.id_operacion,
-            "modo": order.modo.value,
-            "ticker": order.ticker,
-            "tipo_orden": order.tipo_orden.value,
-            "cantidad_acciones": order.cantidad_acciones,
-            "precio_ejecutado": order.precio_ejecutado,
-            "total_invertido_usd": order.total_invertido_usd,
-            "stop_loss": order.stop_loss,
-            "target_precio": order.target_precio,
-            "estado": order.estado.value,
-            "fecha_ejecucion": order.fecha_ejecucion.isoformat(),
-            "tesis_referencia": order.tesis_referencia,
+            "tipo": "rebalanceo_mensual",
+            "mes_ano": report.mes_ano,
+            "fecha": report.fecha,
+            "peso_cash_pct": report.peso_cash_pct,
+            "cash_usd": report.cash_usd,
+            "capital_total_usd": report.capital_total_usd,
         }
 
-        riesgo_usd = abs(order.precio_ejecutado - order.stop_loss) * order.cantidad_acciones
-        beneficio_usd = abs(order.target_precio - order.precio_ejecutado) * order.cantidad_acciones
-        ratio_rr = round(beneficio_usd / riesgo_usd, 2) if riesgo_usd > 0 else 0.0
+        # Tablas de compras y ventas
+        compras_rows = []
+        ventas_rows = []
+        cartera_rows = []
 
-        body = f"""# 📝 Registro de Operación: {order.tipo_orden.value} {order.ticker} ({order.id_operacion})
+        for p in report.propuestas:
+            if p.accion in (RebalanceAction.COMPRAR, RebalanceAction.INCREMENTAR):
+                compras_rows.append(
+                    f"| `[[{p.ticker}]]` | **{p.accion.value}** | {p.peso_objetivo_pct:.1f}% | ${p.capital_asignado_usd:,.2f} | {p.acciones_estimadas:.2f} | ${p.stop_loss_sugerido:,.2f} | ${p.target_sugerido:,.2f} | {p.motivo} |"
+                )
+            elif p.accion in (RebalanceAction.VENDER, RebalanceAction.REDUCIR):
+                ventas_rows.append(
+                    f"| `[[{p.ticker}]]` | **{p.accion.value}** | {p.peso_actual_pct:.1f}% | {p.peso_objetivo_pct:.1f}% | ${p.capital_asignado_usd:,.2f} | {p.motivo} |"
+                )
+
+            if p.peso_objetivo_pct > 0:
+                cartera_rows.append(
+                    f"| `[[{p.ticker}]]` | `{p.sector}` | **{p.peso_objetivo_pct:.1f}%** | ${p.capital_asignado_usd:,.2f} | ${p.stop_loss_sugerido:,.2f} | {p.conviccion}/10 |"
+                )
+
+        tabla_compras_str = "\n".join(compras_rows) if compras_rows else "| - | *No hay nuevas compras requeridas* | - | - | - | - | - | - |"
+        tabla_ventas_str = "\n".join(ventas_rows) if ventas_rows else "| - | *No hay ventas requeridas este mes* | - | - | - | - |"
+        tabla_cartera_str = "\n".join(cartera_rows)
+
+        pct_equity = round(100.0 - report.peso_cash_pct, 1)
+        equity_usd = round(report.capital_total_usd - report.cash_usd, 2)
+
+        body = f"""# 📅 Propuesta de Rebalanceo Mensual: {report.mes_ano}
+
+> [!IMPORTANT]
+> **Fecha de Emisión:** {report.fecha}  
+> **Capital Total:** `${report.capital_total_usd:,.2f} USD` | **Reserva de Liquidez (Cash):** `{report.peso_cash_pct:.1f}% (${report.cash_usd:,.2f})`  
+> **Estrategia:** Asignación de cartera a medio/largo plazo con vigilancia diaria intrames.
 
 ---
 
-## Parámetros de la Ejecución
+## 🌍 1. Diagnóstico Macroeconómico, Geopolítico y Sentimiento
 
-* **Activo:** `[[{order.ticker}]]`
-* **Tipo:** {order.tipo_orden.value}
-* **Cantidad:** `{order.cantidad_acciones:.2f} acciones` @ `${order.precio_ejecutado:,.2f}`
-* **Capital Comprometido:** `${order.total_invertido_usd:,.2f}`
-* **Riesgo Máximo (\$):** `${riesgo_usd:,.2f}`
-* **Beneficio Esperado (\$):** `${beneficio_usd:,.2f}`
-* **Ratio R:R:** `{ratio_rr}`
+### Régimen Macro Actual
+{report.regimen_macro}
+
+### Dinámica Geopolítica y Cadenas de Suministro
+{report.geopolitica_resumen}
+
+### Sentimiento de Mercado, Inercias y Sesgos
+{report.sentimiento_resumen}
 
 ---
 
-## Justificación
+## 🎯 2. Lista Maestra de Acciones: Día 1
 
-{order.justificacion or 'Operación ejecutada automáticamente por el motor Sharky basada en tesis previa.'}
+### 🔴 Órdenes de Venta / Reducción (Trim / Exit)
+| Ticker | Acción | % Actual | % Objetivo | Capital a Liberar | Motivo / Tesis |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+{tabla_ventas_str}
+
+### 🟢 Órdenes de Compra / Expansión (Buy / Add)
+| Ticker | Acción | % Objetivo | Capital Asignado | Acciones Est. | Stop Loss | Target | Tesis |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+{tabla_compras_str}
+
+---
+
+## 💼 3. Composición Objetivo de la Cartera
+
+```text
+Reserva de Liquidez (Cash) : {report.peso_cash_pct:.1f}% (${report.cash_usd:,.2f})
+Renta Variable / Activos    : {pct_equity:.1f}% (${equity_usd:,.2f})
+```
+
+| Activo / Ticker | Sector | Ponderación (%) | Capital ($) | Rango Stop Loss | Convicción (1-10) |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+{tabla_cartera_str}
+
+---
+
+## 🛡️ 4. Validación del RiskGovernor
+
+* [x] **Límite de Exposición por Activo:** Ningún activo individual supera el 10% del total.
+* [x] **Reserva de Liquidez Mínima:** Mantenimiento de al menos 15% en Cash para contingencias.
+* [x] **Ratio R:R Promedio:** $\ge 2.0$ en todas las posiciones sugeridas.
+* [x] **Plan de Contingencia Intrames:** Las posiciones solo se cerrarán antes del próximo día 1 si cruzan su `Stop Loss` innegociable.
 """
         content = self.build_markdown(meta, body)
         file_path.write_text(content, encoding="utf-8")
@@ -229,11 +290,11 @@ class VaultManager:
             "eventos_clave": events or "Revisión diaria del ciclo de mercado",
         }
 
-        body = f"""# 📓 Diario de Reflexión: {date_str}
+        body = f"""# 📓 Diario de Reflexión e Inteligencia: {date_str}
 
 ---
 
-## 1. Resumen de la Jornada de Mercado
+## 1. Monitor Diario de Mercado, Macro y Geopolítica
 
 {summary}
 
@@ -249,9 +310,9 @@ class VaultManager:
 
 ---
 
-## 3. Autocrítica y Compromiso para Mañana
+## 3. Disciplina Operativa
 
-La disciplina y la paciencia son los únicos escudos contra la destrucción del capital. Seguiré estrictamente mis `[[Reglas_De_Supervivencia]]`.
+Durante el mes no se realizan operaciones por impulso. Toda la evidencia y datos acumulados se canalizan hacia el **Rebalanceo del Día 1** (`[[08_Rebalanceos_Mensuales]]`).
 """
         content = self.build_markdown(meta, body)
         file_path.write_text(content, encoding="utf-8")

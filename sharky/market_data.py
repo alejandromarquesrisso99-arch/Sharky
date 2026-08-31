@@ -1,11 +1,14 @@
 """
 Proveedor de datos de mercado para Sharky.
-Utiliza yfinance con mecanismos de caché y fallback offline simulado.
+Monitorea activos individuales, índices de referencia (SPY, QQQ) y macro-indicadores (TLT, GLD, USO).
 """
 
 from typing import Dict, List, Optional
 import datetime
 from sharky.models import MarketSnapshot
+
+MACRO_TICKERS = ["SPY", "QQQ", "TLT", "GLD", "USO"]
+CORE_WATCHLIST = ["NVDA", "ASML", "MSFT", "AAPL", "GOOGL", "TSM", "AMZN", "META"]
 
 
 class MarketDataProvider:
@@ -43,18 +46,24 @@ class MarketDataProvider:
                         market_cap=info.get("marketCap"),
                         timestamp=datetime.datetime.now()
                     )
-            except Exception as e:
-                # Fallback en caso de error de red con yfinance
+            except Exception:
                 pass
 
-        # Fallback offline con valores simulados realistas
+        # Fallback offline con cotizaciones representativas de mercado y macro
         mock_prices = {
+            "SPY": (560.20, +0.4),
+            "QQQ": (485.50, +0.7),
+            "TLT": (95.40, -0.3),
+            "GLD": (230.10, +0.5),
+            "USO": (78.30, -0.8),
             "NVDA": (125.50, +1.8),
             "ASML": (870.00, -0.4),
             "MSFT": (415.20, +0.6),
             "AAPL": (224.30, +0.2),
             "GOOGL": (168.90, +1.1),
             "TSM": (175.40, +2.3),
+            "AMZN": (178.50, +0.9),
+            "META": (510.80, +1.4),
         }
         base_price, base_change = mock_prices.get(ticker, (100.0, 0.0))
         return MarketSnapshot(
@@ -70,3 +79,7 @@ class MarketDataProvider:
     def get_batch_snapshots(self, tickers: List[str]) -> Dict[str, MarketSnapshot]:
         """Obtiene datos de mercado para una lista de tickers."""
         return {t: self.get_snapshot(t) for t in tickers}
+
+    def get_macro_overview(self) -> Dict[str, MarketSnapshot]:
+        """Devuelve el estado de los indicadores macroeconómicos de referencia."""
+        return self.get_batch_snapshots(MACRO_TICKERS)

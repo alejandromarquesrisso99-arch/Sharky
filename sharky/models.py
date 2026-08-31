@@ -20,6 +20,14 @@ class OrderType(str, Enum):
     VENTA = "VENTA"
 
 
+class RebalanceAction(str, Enum):
+    COMPRAR = "COMPRAR"
+    VENDER = "VENDER"
+    MANTENER = "MANTENER"
+    REDUCIR = "REDUCIR"
+    INCREMENTAR = "INCREMENTAR"
+
+
 class OrderStatus(str, Enum):
     ABIERTA = "ABIERTA"
     CERRADA = "CERRADA"
@@ -89,3 +97,30 @@ class MarketSnapshot(BaseModel):
     pe_ratio: Optional[float] = None
     market_cap: Optional[float] = None
     timestamp: datetime = Field(default_factory=datetime.now)
+
+
+class AllocationProposal(BaseModel):
+    ticker: str
+    sector: str
+    accion: RebalanceAction
+    peso_actual_pct: float = 0.0
+    peso_objetivo_pct: float
+    capital_asignado_usd: float
+    precio_estimado: float
+    acciones_estimadas: float
+    stop_loss_sugerido: float
+    target_sugerido: float
+    conviccion: int = Field(default=8, ge=1, le=10)
+    motivo: str
+
+
+class MonthlyRebalanceReport(BaseModel):
+    mes_ano: str
+    fecha: str
+    propuestas: List[AllocationProposal]
+    peso_cash_pct: float = 20.0
+    cash_usd: float = 2000.0
+    capital_total_usd: float = 10000.0
+    regimen_macro: str = "Expansión Tardía / Tipos Neutral-Restrictivos"
+    geopolitica_resumen: str = "Tensión en semiconductores y rutas marítimas"
+    sentimiento_resumen: str = "Codicia moderada con amplitud concentrada en Big Tech"
