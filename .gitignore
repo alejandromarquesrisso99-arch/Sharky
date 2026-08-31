@@ -11,8 +11,9 @@ __pycache__/
 *.so
 .pytest_cache/
 
-# Variables de entorno y secretos
+# Variables de entorno, secretos y extractos financieros personales
 .env
+*.pdf
 
 # Distribución / Build
 dist/
