@@ -82,7 +82,8 @@ class MonthlyRebalanceEngine:
             # Determinar acción frente a la posición actual
             if ticker in active_tickers:
                 curr_thesis = active_tickers[ticker]
-                curr_pos_usd = curr_thesis.capital_asignado
+                cantidad_acc = (curr_thesis.capital_asignado / curr_thesis.precio_entrada) if curr_thesis.precio_entrada > 0 else 0.0
+                curr_pos_usd = round(cantidad_acc * price, 2) if price > 0 else curr_thesis.capital_asignado
                 diff = target_usd - curr_pos_usd
                 if diff > 100:
                     action = RebalanceAction.INCREMENTAR

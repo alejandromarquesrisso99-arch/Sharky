@@ -48,7 +48,7 @@ class InvestmentCommittee:
 
         return {
             "fecha": now_str,
-            "departamentos": [r.dict() for r in departmental_reports],
+            "departamentos": [(r.model_dump() if hasattr(r, "model_dump") else r.dict()) for r in departmental_reports],
             "veredicto_cio": cio_verdict,
         }
 

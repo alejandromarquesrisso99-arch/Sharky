@@ -120,7 +120,7 @@ class SharkyAgent:
             "diario_guardado": str(journal_path),
             "rebalanceo_generado": str(monthly_report_path) if monthly_report_path else None,
             "tesis_activas": len(theses),
-            "alertas_nuevas": [a.dict() for a in alerts_created],
+            "alertas_nuevas": [(a.model_dump() if hasattr(a, "model_dump") else a.dict()) for a in alerts_created],
             "alertas_stop_loss": stop_loss_warnings,
         }
 
@@ -154,7 +154,7 @@ class SharkyAgent:
             "reserva_cash_pct": report.peso_cash_pct,
             "reserva_cash_usd": report.cash_usd,
             "num_propuestas": len(report.propuestas),
-            "propuestas": [p.dict() for p in report.propuestas],
+            "propuestas": [(p.model_dump() if hasattr(p, "model_dump") else p.dict()) for p in report.propuestas],
         }
 
     def get_active_alerts(self) -> List[OpportunityAlert]:

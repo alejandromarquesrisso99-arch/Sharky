@@ -194,7 +194,13 @@ def main():
         default=60,
         help="Intervalo de comprobación horaria en minutos (por defecto: 60)",
     )
-    subparsers.add_parser("daemon", help="Alias para service")
+    daemon_parser = subparsers.add_parser("daemon", help="Alias para service")
+    daemon_parser.add_argument(
+        "--interval",
+        type=int,
+        default=60,
+        help="Intervalo de comprobación horaria en minutos (por defecto: 60)",
+    )
 
     args = parser.parse_args()
     agent = SharkyAgent()

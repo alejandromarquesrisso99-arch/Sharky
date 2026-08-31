@@ -30,13 +30,18 @@ class VaultManager:
     def _ensure_structure(self) -> None:
         """Garantiza que todas las carpetas del cerebro existan en la bóveda."""
         subdirs = [
+            "00_Comite_Direccion",
             "00_Sistema",
+            "01_Departamento_Macro",
             "01_Tesis_Activas",
+            "02_Analisis_Fundamental",
             "02_Tesis_Cerradas",
             "03_Activos/Sectores",
             "03_Activos/Empresas",
             "03_Activos/Macro_Geopolitica",
+            "03_Mesa_Cuantitativa_Riesgo",
             "04_Operaciones_Bitacora",
+            "04_Sentimiento_Y_Flujos",
             "05_Diario_Reflexion",
             "06_Lecciones_Aprendidas",
             "07_Plantillas",
