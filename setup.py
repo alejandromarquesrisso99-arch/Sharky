@@ -1,24 +1,11 @@
-from setuptools import setup, find_packages
+"""
+Shim de compatibilidad para instaladores antiguos.
 
-setup(
-    name="sharky-brain",
-    version="1.0.0",
-    description="Firma de inversión y Family Office digital autónomo vinculado a Obsidian con gestión departamental y supervivencia de capital",
-    author="Alejandro Marqués",
-    packages=find_packages(),
-    python_requires=">=3.9",
-    install_requires=[
-        "anthropic>=0.40.0",
-        "yfinance>=0.2.40",
-        "pydantic>=2.7.0",
-        "python-dotenv>=1.0.1",
-        "pyyaml>=6.0.1",
-        "rich>=13.7.0",
-        "schedule>=1.2.0",
-    ],
-    entry_points={
-        "console_scripts": [
-            "sharky=sharky.cli:main",
-        ],
-    },
-)
+Los metadatos y las dependencias del paquete viven en `pyproject.toml` (PEP 621).
+Duplicarlos aqui provocaba que ambas listas se desincronizaran, asi que este
+archivo se limita a delegar en el backend de setuptools.
+"""
+
+from setuptools import setup
+
+setup()

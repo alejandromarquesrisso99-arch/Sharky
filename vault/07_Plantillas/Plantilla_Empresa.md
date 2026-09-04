@@ -27,5 +27,5 @@ tesis_asociadas: ""
 
 ## Enlaces del Grafo
 
-* Sector: `[[{{SECTOR}}]]`
+* Sector: [[{{SECTOR}}]]
 * Tesis: `{{ENLACE_A_TESIS}}`

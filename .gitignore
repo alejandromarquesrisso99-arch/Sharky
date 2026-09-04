@@ -10,6 +10,8 @@ __pycache__/
 *$py.class
 *.so
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
 # Variables de entorno, secretos y extractos financieros personales
 .env
@@ -19,6 +21,14 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+
+# Logs del arranque automático en Windows
+logs/
+
+# Backups locales del vault (scripts/backup_vault.ps1). El vault en sí SÍ se
+# versiona con git; esto es la copia de seguridad fuera de git, no un
+# sustituto de hacer commit/push con regularidad.
+backups/
 
 # Archivos de sistema y editores
 .DS_Store

@@ -45,7 +45,7 @@ estado: ACTIVA
 | **Zona de Entrada Ideal** | `${{ENTRADA_SUGERIDA}}` | Punto óptimo de entrada con bajo riesgo |
 | **Stop Loss Innegociable** | `${{STOP_LOSS}}` | Invalidación total de la hipótesis de inversión |
 | **Target Objetivo (T1)** | `${{TARGET_PRECIO}}` | Primera zona de toma parcial/total de beneficios |
-| **Ponderación Máxima Cartera** | `{{PCT_MAX_CARTERA}}%` | Respetando `[[Reglas_De_Supervivencia]]` |
+| **Ponderación Máxima Cartera** | `{{PCT_MAX_CARTERA}}%` | Respetando [[Reglas_De_Supervivencia]] |
 
 ---
 
@@ -58,4 +58,4 @@ estado: ACTIVA
 
 ## 📌 5. Acción Recomendada
 
-* [ ] Evaluar inclusión en la cartera para el próximo **Rebalanceo Mensual** (`[[08_Rebalanceos_Mensuales]]`) o ejecución anticipada si el catalizador es de tiempo crítico.
+* [ ] Evaluar inclusión en la cartera para el próximo **Rebalanceo Mensual** ([[08_Rebalanceos_Mensuales]]) o ejecución anticipada si el catalizador es de tiempo crítico.

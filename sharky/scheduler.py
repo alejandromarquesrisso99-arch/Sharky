@@ -1,83 +1,104 @@
 """
-Planificador Inteligente de Tareas (Scheduler 24/7) para Sharky.
-Ejecuta la cadencia óptima de vigilancia sin sobrecargar recursos ni gastar tokens innecesarios:
-- Cada 1 hora (o configurable): Escaneo de precios, alertas de stop-loss y radar de oportunidades.
-- Al cierre de mercado diario (22:00 CET / 16:00 EST): Informe de inteligencia, diario de reflexión y estado vital.
-- Día 1 de cada mes (08:00): Propuesta maestra de rebalanceo de cartera.
+Planificador 24/7 de Sharky.
+
+Cadencia:
+  * Cada N minutos: vigilancia ligera (cotizaciones, stop-loss, radar).
+  * Al cierre de mercado (22:00 hora local): ciclo diario completo. Si es día 1,
+    el propio ciclo emite el rebalanceo mensual.
+
+La versión anterior programaba además una tarea de rebalanceo a las 08:00 que
+comprobaba `day == 1`; como `run_daily_cycle` ya lo genera, el día 1 se
+escribían **dos** informes. Aquí el rebalanceo tiene un único responsable.
 """
 
 import time
-import schedule
 from datetime import datetime
+
+import schedule
+
 from sharky.agent_loop import SharkyAgent
-from sharky.vault_manager import VaultManager
+from sharky.opportunity_detector import UNIVERSO_CONVICCION
+
+HORA_CIERRE_DIARIO = "22:00"
 
 
 class SharkyScheduler:
-    def __init__(self, check_interval_minutes: int = 60):
+    def __init__(self, check_interval_minutes: int = 60, hora_cierre: str = HORA_CIERRE_DIARIO):
         self.agent = SharkyAgent()
-        self.check_interval_minutes = check_interval_minutes
+        self.check_interval_minutes = max(1, check_interval_minutes)
+        self.hora_cierre = hora_cierre
 
-    def run_hourly_surveillance(self):
-        """Revisión ligera horaria: cotizaciones, stop-loss y radar de oportunidades."""
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"[{now_str}] 🛰️ [24/7] Ejecutando escaneo horario de mercado y oportunidades...")
+    @staticmethod
+    def _sello() -> str:
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # ------------------------------------------------------------------
+    def run_surveillance(self) -> None:
+        """Vigilancia ligera: no escribe el diario ni consume la API de Claude."""
+        print(f"[{self._sello()}] 🛰️  Escaneo de vigilancia...")
         try:
-            # Comprobar precios y stop loss
-            theses = self.agent.vault.list_active_theses()
-            snapshots = self.agent.market.get_batch_snapshots([t.ticker for _, t in theses] + ["ASML", "TSM", "GOOGL"])
-            
-            # Escanear oportunidades
-            existing_tickers = [t.ticker for _, t in theses]
-            alerts = self.agent.detector.scan_for_opportunities(snapshots, existing_tickers)
-            for a in alerts:
-                self.agent.vault.write_opportunity_alert(a)
+            valuation, health, incumplimientos = self.agent.snapshot_estado()
+            tesis = self.agent.vault.list_active_theses()
+            avisos = self.agent._revisar_stop_loss(tesis, valuation)
 
-            # Verificar stop losses
-            for _, t in theses:
-                snap = snapshots.get(t.ticker)
-                if snap and snap.precio_actual <= t.stop_loss and t.stop_loss > 0:
-                    print(f"[{now_str}] ⚠️ ALERTA CRÍTICA: Stop Loss alcanzado en {t.ticker} (${snap.precio_actual:,.2f})")
+            tickers = [p.ticker for p in valuation.posiciones]
+            snapshots = self.agent.market.get_batch_snapshots(
+                tickers + list(UNIVERSO_CONVICCION)
+            )
+            nuevas = self.agent.detector.scan_for_opportunities(
+                snapshots,
+                existing_positions=tickers,
+                ya_alertado=self.agent.vault.has_active_alert,
+            )
+            for alerta in nuevas:
+                self.agent.vault.write_opportunity_alert(alerta)
+                print(f"[{self._sello()}] ⭐ Nueva alerta: {alerta.ticker} (R:R {alerta.ratio_rr:.2f}:1)")
 
-            print(f"[{now_str}] ✅ Escaneo horario finalizado con éxito. {len(alerts)} alerta(s) activas.")
-        except Exception as e:
-            print(f"[{now_str}] ❌ Error en escaneo horario: {e}")
+            for aviso in avisos:
+                print(f"[{self._sello()}] {aviso}")
 
-    def run_daily_close(self):
-        """Cierre de mercado diario: reflexión completa, diario y actualización de salud."""
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"\n[{now_str}] 📓 [24/7] Ejecutando informe de cierre diario de mercado...")
+            print(
+                f"[{self._sello()}] ✅ NAV {valuation.nav_eur:,.2f} € | "
+                f"{health.estado_vital.value} | drawdown {health.drawdown_actual_pct:.2f}% | "
+                f"{len(incumplimientos)} incumplimiento(s) | {len(nuevas)} alerta(s) nueva(s)"
+            )
+        except FileNotFoundError as exc:
+            print(f"[{self._sello()}] ❌ {exc}")
+        except Exception as exc:
+            print(f"[{self._sello()}] ❌ Error en la vigilancia: {exc}")
+
+    def run_daily_close(self) -> None:
+        """Cierre diario completo. El día 1 emite también el rebalanceo."""
+        print(f"\n[{self._sello()}] 📓 Cierre diario de mercado...")
         try:
             res = self.agent.run_daily_cycle()
-            print(f"[{now_str}] ✅ Diario de reflexión guardado: {res['diario_guardado']}")
-            print(f"[{now_str}] 🫀 Salud actual: {res['salud']:.1f}% | Capital: ${res['capital_actual']:,.2f}")
-        except Exception as e:
-            print(f"[{now_str}] ❌ Error en ciclo diario: {e}")
+            print(f"[{self._sello()}] ✅ Diario: {res['diario_guardado']}")
+            print(
+                f"[{self._sello()}] 🫀 {res['estado_vital']} | NAV {res['nav_eur']:,.2f} € | "
+                f"salud {res['salud']:.1f}% | energía {res['energia']:.1f}"
+            )
+            if res.get("rebalanceo_generado"):
+                print(f"[{self._sello()}] 📅 Rebalanceo del Día 1: {res['rebalanceo_generado']}")
+            for aviso in res.get("alertas_stop_loss", []):
+                print(f"[{self._sello()}] {aviso}")
+        except FileNotFoundError as exc:
+            print(f"[{self._sello()}] ❌ {exc}")
+        except Exception as exc:
+            print(f"[{self._sello()}] ❌ Error en el ciclo diario: {exc}")
 
-    def run_monthly_rebalance(self):
-        """Día 1 de cada mes: generar informe formal de rebalanceo de cartera."""
-        now = datetime.now()
-        if now.day == 1:
-            now_str = now.strftime("%Y-%m-%d %H:%M:%S")
-            print(f"\n[{now_str}] 📅 [24/7] ¡DÍA 1 DETECTADO! Generando Rebalanceo Mensual...")
-            try:
-                res = self.agent.generate_monthly_rebalance()
-                print(f"[{now_str}] ✅ Informe maestro de rebalanceo generado: {res['archivo_informe']}")
-            except Exception as e:
-                print(f"[{now_str}] ❌ Error en rebalanceo mensual: {e}")
+    # ------------------------------------------------------------------
+    def start(self) -> None:
+        print(
+            f"[Sharky 24/7] 🚀 Servicio iniciado.\n"
+            f"  * Vigilancia cada {self.check_interval_minutes} min.\n"
+            f"  * Cierre diario a las {self.hora_cierre} (hora local del sistema).\n"
+            f"  * El rebalanceo mensual lo emite el cierre del día 1."
+        )
 
-    def start(self):
-        """Inicia el bucle continuo 24/7."""
-        print(f"[Sharky 24/7] 🚀 Servicio iniciado. Vigilancia cada {self.check_interval_minutes} min.")
-        print("[Sharky 24/7] Rutina diaria programada a las 22:00 CET. Rebalanceo el día 1 a las 08:00.")
+        schedule.every(self.check_interval_minutes).minutes.do(self.run_surveillance)
+        schedule.every().day.at(self.hora_cierre).do(self.run_daily_close)
 
-        # Programar tareas periódicas
-        schedule.every(self.check_interval_minutes).minutes.do(self.run_hourly_surveillance)
-        schedule.every().day.at("22:00").do(self.run_daily_close)
-        schedule.every().day.at("08:00").do(self.run_monthly_rebalance)
-
-        # Ejecutar una primera pasada al arrancar
-        self.run_hourly_surveillance()
+        self.run_surveillance()
 
         try:
             while True:

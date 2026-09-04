@@ -19,7 +19,7 @@ tesis_referencia: "[[{{NOMBRE_TESIS}}]]"
 
 ## Parámetros de la Ejecución
 
-* **Activo:** `[[{{TICKER}}]]`
+* **Activo:** [[{{TICKER}}]]
 * **Tipo:** {{TIPO_ORDEN}}
 * **Cantidad:** `{{CANTIDAD}} acciones` @ `${{PRECIO_EJECUTADO}}`
 * **Capital Comprometido:** `${{TOTAL_USD}}`

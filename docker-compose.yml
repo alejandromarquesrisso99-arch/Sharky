@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   sharky:
     build: .
@@ -8,8 +6,17 @@ services:
     env_file:
       - .env
     volumes:
-      # Montar la bóveda en el host para poder abrirla con Obsidian en tiempo real
+      # La boveda se monta desde el host para poder abrirla con Obsidian en vivo.
+      # Es tambien donde vive el libro de posiciones, asi que debe persistir.
       - ./vault:/app/vault
     environment:
       - SHARKY_VAULT_PATH=/app/vault
       - PYTHONUNBUFFERED=1
+      - PYTHONIOENCODING=utf-8
+      # La cadencia diaria (cierre a las 22:00) depende de la hora local.
+      - TZ=${TZ:-Europe/Madrid}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

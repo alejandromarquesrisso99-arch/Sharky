@@ -41,6 +41,9 @@ actualizado: 2026-08-31
 
 ## 2. Objetivos Financieros y de Supervivencia
 
-1. **Objetivo de Retorno:** Generar rentabilidad superior a la tasa libre de riesgo y al S&P 500 (`[[SPY]]`) a través de selección quirúrgica de empresas líderes.
-2. **Control de Volatilidad y Drawdown:** Limitar el drawdown máximo por debajo del 15%. La pérdida del 20% se considera el umbral de liquidación/muerte.
+1. **Objetivo de Retorno:** Generar rentabilidad superior a la tasa libre de riesgo y al S&P 500 ([[SPY]]) a través de selección quirúrgica de empresas líderes.
+2. **Control de Volatilidad y Drawdown:** Operar de forma disciplinada según la
+   escalera de contingencia de [[Reglas_De_Supervivencia]] (Óptimo hasta 3%,
+   Alerta 3%-8%, Cuidados Intensivos 8%-20%). La pérdida del 20% se considera
+   el umbral de liquidación/muerte.
 3. **Liquidez Estratégica:** Mantener permanentemente entre el 15% y el 30% en efectivo (*Cash*) o equivalentes para contingencias y compras oportunistas.

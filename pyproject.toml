@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sharky-brain"
-version = "1.0.0"
-description = "Firma de inversión y Family Office digital autónomo vinculado a Obsidian con gestión departamental y supervivencia de capital"
+version = "2.0.0"
+description = "Family Office autónomo en EUR: libro de posiciones real, gobernanza de riesgo determinista y memoria de largo plazo en Obsidian"
 readme = "README.md"
 requires-python = ">=3.9"
 authors = [
@@ -32,10 +32,47 @@ dependencies = [
     "schedule>=1.2.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
 [project.scripts]
 sharky = "sharky.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# `conftest.py` expone los dobles de prueba (FakeMarket, FakeFx) como modulo
+# importable desde los tests.
+pythonpath = [".", "tests"]
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["sharky*"]
 exclude = ["vault*", "scripts*", "tests*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+# Ruleset por defecto de ruff (E4, E7, E9, F). Se fija explícitamente aquí
+# para que un futuro cambio del default de la herramienta no cambie
+# silenciosamente lo que la CI considera un error.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_configs = true
+# Dependencias sin stubs de tipos disponibles (yfinance, anthropic, schedule):
+# se ignoran explícitamente en vez de con --ignore-missing-imports global,
+# para no silenciar por accidente un import mal escrito de un módulo propio.
+[[tool.mypy.overrides]]
+module = ["yfinance.*", "anthropic.*", "schedule.*"]
+ignore_missing_imports = true
+
+[tool.bandit]
+# Sólo el código que se ejecuta en producción: la bóveda, el entorno virtual
+# y los tests (que sí usan `assert` como mecanismo normal de aserción, no
+# como control de acceso) no son la superficie que bandit debe auditar.
+exclude_dirs = ["tests", "vault", "vault_ref", ".venv", ".uvenv"]

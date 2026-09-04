@@ -1,0 +1,10 @@
+# Análisis de seguridad (no necesarios para desarrollar ni para correr los
+# tests -- de ahí que vivan separados de requirements-dev.txt). Se instalan
+# sólo en el job "security" de la CI y, opcionalmente, a mano:
+#
+#   pip install -r requirements-security.txt
+#   bandit -c pyproject.toml -r sharky/ scripts/
+#   pip-audit -r requirements.txt
+#
+bandit[toml]>=1.7.9
+pip-audit>=2.7.0

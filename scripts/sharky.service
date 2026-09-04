@@ -1,17 +1,7 @@
-[Unit]
-Description=Sharky Capital Management - Firma Autonoma de Inversion 24/7
-After=network.target
-
-[Service]
-Type=simple
-User=pi
-WorkingDirectory=/home/pi/Sharky
-ExecStart=/home/pi/Sharky/.venv/bin/python -m sharky.cli service --interval 60
-Restart=always
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
-Environment=PYTHONUNBUFFERED=1
-
-[Install]
-WantedBy=multi-user.target
+# OBSOLETO: el despliegue 24/7 en Raspberry Pi / Linux (systemd) se ha
+# retirado. Sharky ahora se ejecuta una vez al dia al iniciar sesion en
+# Windows: ver scripts/sharky_windows_startup.bat e
+# scripts/instalar_inicio_windows.ps1.
+#
+# Este archivo ya no se genera ni se usa y puede borrarse junto con
+# scripts/deploy_raspberry.sh.
