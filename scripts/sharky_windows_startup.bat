@@ -30,6 +30,13 @@ if not exist ".venv\Scripts\activate.bat" (
 call .venv\Scripts\activate.bat
 
 if not exist "logs" mkdir "logs"
+
+REM Rota el log si supera ~5 MB: sin techo, un arranque diario durante meses
+REM lo deja creciendo sin fin. Se conserva sólo una copia anterior.
+set SHARKY_LOG_SIZE=0
+if exist "logs\sharky_startup.log" for %%F in ("logs\sharky_startup.log") do set SHARKY_LOG_SIZE=%%~zF
+if %SHARKY_LOG_SIZE% GTR 5242880 move /y "logs\sharky_startup.log" "logs\sharky_startup.log.old" >nul
+
 python -m sharky.cli startup >> "logs\sharky_startup.log" 2>&1
 
 REM Backup local del vault tras el ciclo, independientemente de si el ciclo
@@ -37,5 +44,11 @@ REM en si ha ido bien: las ediciones manuales del dia (operaciones
 REM registradas, notas) tambien merecen quedar respaldadas. Ver
 REM scripts\backup_vault.ps1 -- retiene las ultimas 14 copias.
 powershell -ExecutionPolicy Bypass -File "%~dp0backup_vault.ps1" >> "logs\sharky_startup.log" 2>&1
+
+REM Aviso emergente si alguna posicion ha cruzado hoy su stop-loss o su
+REM take-profit. Va el ultimo a proposito: la ventana bloquea hasta que la
+REM cierras, y el backup del vault no debe esperar a eso. Si no hay ningun
+REM nivel cruzado -- el caso normal -- no aparece nada.
+powershell -ExecutionPolicy Bypass -File "%~dp0avisar_niveles_windows.ps1" >> "logs\sharky_startup.log" 2>&1
 
 endlocal

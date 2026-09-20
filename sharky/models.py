@@ -48,16 +48,26 @@ class OrderStatus(str, Enum):
     CANCELADA = "CANCELADA"
 
 
-class ExecutionMode(str, Enum):
-    PAPER_TRADING = "PAPER_TRADING"
-    REAL = "REAL"
-
-
 class AssetClass(str, Enum):
     ACCION = "ACCION"
     ETF = "ETF"
     ETC = "ETC"
     CRIPTO = "CRIPTO"
+
+
+class LevelKind(str, Enum):
+    """Qué nivel de una tesis ha tocado el precio de mercado.
+
+    `STOP_LOSS` es una salida obligatoria del mandato; `TAKE_PROFIT` es
+    informativo -- ver `sharky.level_watch`. `NO_VERIFICABLE` no es un
+    nivel alcanzado sino la declaración de que no se pudo comprobar, y
+    existe por el mismo motivo que `PriceSource`: un nivel que no se pudo
+    mirar no puede presentarse como un nivel que no saltó.
+    """
+
+    STOP_LOSS = "STOP_LOSS"
+    TAKE_PROFIT = "TAKE_PROFIT"
+    NO_VERIFICABLE = "NO_VERIFICABLE"
 
 
 class PriceSource(str, Enum):
@@ -201,6 +211,10 @@ class HealthStatus(BaseModel):
     # Fiabilidad del NAV que sustenta estas métricas.
     cobertura_datos_pct: float = 100.0
     ultima_actualizacion: datetime = Field(default_factory=datetime.now)
+    # Distinto de `ultima_actualizacion`: sólo lo escribe `run_daily_cycle`, no
+    # cualquier escritura de Estado_Vital.md (p.ej. registrar una operación).
+    # Es lo que decide si "el ciclo de hoy ya se ejecutó" (ver CICLO-2).
+    ultimo_ciclo_diario: datetime = Field(default_factory=datetime.now)
 
 
 class RiskBreach(BaseModel):
@@ -262,9 +276,49 @@ class InvestmentThesis(BaseModel):
     tiene_posicion: bool = False
 
 
+class LevelAlert(BaseModel):
+    """Un nivel de una tesis alcanzado por el precio de mercado.
+
+    Todos los importes `_eur` están en divisa base; `nivel` y `stop_sugerido`
+    viven en `divisa_nivel`, que es la divisa declarada por la tesis y no
+    tiene por qué ser la de cotización (ver `sharky.level_watch`).
+    """
+
+    tipo: LevelKind
+    ticker: str
+    nota_activo: str = ""
+    precio_eur: float = 0.0
+    precio_cotizacion: float = 0.0
+    divisa_cotizacion: str = "EUR"
+    nivel: float = 0.0                   # stop o target, en `divisa_nivel`
+    nivel_eur: float = 0.0
+    divisa_nivel: str = "EUR"
+    valor_posicion_eur: float = 0.0
+    pnl_eur: float = 0.0
+    pnl_pct: float = 0.0
+    # Sólo en TAKE_PROFIT: stop dinámico propuesto, en `divisa_nivel`.
+    stop_sugerido: float = 0.0
+    stop_sugerido_eur: float = 0.0
+    stop_actual: float = 0.0
+    criterio_stop: str = ""              # "break-even" | "trailing" | ""
+    motivo: str = ""                     # sólo en NO_VERIFICABLE
+
+    @property
+    def es_accionable(self) -> bool:
+        """True si el precio cruzó un nivel de verdad (no una no-verificación)."""
+        return self.tipo in (LevelKind.STOP_LOSS, LevelKind.TAKE_PROFIT)
+
+
 class TradeOrder(BaseModel):
+    """Una operación registrada siempre es una compra o venta real.
+
+    Sharky no envía órdenes al broker (ver `sharky.trade_ledger`): tú ejecutas
+    en Trade Republic y `trade` registra aquí lo ya ejecutado. No existe un
+    modo "simulación" que deje la operación fuera del libro de posiciones --
+    toda entrada que pasa el `RiskGovernor` se asienta en `Cartera_Real.md`.
+    """
+
     id_operacion: str
-    modo: ExecutionMode = ExecutionMode.PAPER_TRADING
     ticker: str
     tipo_orden: OrderType = OrderType.COMPRA
     cantidad_acciones: float

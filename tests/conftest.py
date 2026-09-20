@@ -45,6 +45,9 @@ class FakeMarket:
             return clave, self._divisa(clave)
         return clave, "USD"
 
+    def is_known(self, ticker: str) -> bool:
+        return ticker.upper().strip() in {k.upper() for k in self.precios}
+
     def _divisa(self, ticker: str) -> str:
         for k, (_, div) in self.precios.items():
             if k.upper() == ticker.upper():

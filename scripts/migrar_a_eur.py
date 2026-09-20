@@ -19,7 +19,11 @@ Qué hace
 2. Caduca las alertas emitidas por el detector antiguo (incluidos duplicados),
    cuyos niveles venían de multiplicadores fijos y no de datos de mercado.
 
-Es idempotente: puede ejecutarse varias veces sin efectos adicionales.
+Es idempotente: si detecta que el capital de referencia ya quedó sembrado en
+una ejecución anterior, no vuelve a resembrar `Estado_Vital.md` (lo que sí
+tendría "efectos adicionales": borraría el high-water mark y el drawdown
+acumulados desde entonces, devolviendo la cartera a OPTIMO aunque haya
+habido un drawdown real después de la migración).
 
 Uso:
     python scripts/migrar_a_eur.py
@@ -91,6 +95,21 @@ def main() -> int:
     print(f"   Antes  → NAV {anterior.nav_actual_eur:,.2f} € | "
           f"HWM {anterior.nav_maximo_historico_eur:,.2f} € | "
           f"estado {anterior.estado_vital.value}")
+
+    # Guarda de idempotencia real: `capital_inicial_eur` sólo lo fija esta
+    # migración (o el primer ciclo diario, que hereda el que ya hubiera). Si
+    # ya coincide con la referencia, resembrar de nuevo no sería un no-op:
+    # machacaría el high-water mark y el drawdown acumulados desde entonces
+    # con los de este instante, ocultando un drawdown real posterior a la
+    # migración. Ver la nota de idempotencia en el docstring del módulo.
+    if abs(anterior.capital_inicial_eur - CAPITAL_REFERENCIA_EUR) < 0.01:
+        print(
+            "   • Ya migrado (capital_inicial_eur coincide con la referencia): "
+            "no se resiembra para no perder el historial de drawdown acumulado."
+        )
+        print("\n✅ Migración ya aplicada anteriormente; nada que hacer.")
+        print(f"   Alertas caducadas     : {caducadas}")
+        return 0
 
     portfolio = store.load()
     valoracion = PortfolioValuator().value(portfolio)

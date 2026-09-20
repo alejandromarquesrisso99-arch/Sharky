@@ -29,6 +29,12 @@ Tres reglas gobiernan todo el código, y explican por qué está escrito así:
 3. **Los límites de riesgo son código, no prosa.** `RiskGovernor` implementa
    literalmente los axiomas de `vault/00_Sistema/Reglas_De_Supervivencia.md`, y
    ninguna operación entra en el libro sin pasar por él.
+4. **Este repositorio debe seguir siendo privado.** El libro de posiciones real
+   (`Cartera_Real.md`) y la auditoría inicial de cartera viven también en el
+   **historial** de git, no sólo en el HEAD: quitarlos de una nota no los saca
+   de ahí. Un cambio de visibilidad a público, un fork o añadir un colaborador
+   expondría datos financieros reales. Si algún día esto necesitara ser
+   público, hay que purgar antes ese historial (`git filter-repo`).
 
 ---
 
@@ -72,15 +78,18 @@ informe lo enumera en `datos_ausentes` en lugar de rellenarlo.
 | `sharky/fx.py` | Tipos de cambio a la divisa base. Distingue `GBP` de `GBp`. |
 | `sharky/market_data.py` | Cotizaciones con divisa, procedencia, caché y técnicos. |
 | `sharky/risk_governor.py` | Cortafuegos determinista: estado vital, auditoría y validación de órdenes. |
+| `sharky/level_watch.py` | Vigilancia diaria de stop-loss y take-profit, con el stop dinámico propuesto. |
 | `sharky/trade_ledger.py` | Registro de operaciones. Único camino de escritura al libro. |
 | `sharky/rebalance_engine.py` | Plan del Día 1 por prioridades del mandato. |
 | `sharky/opportunity_detector.py` | Radar de asimetrías con confirmación cuantitativa. |
 | `sharky/firm_departments.py` | Las cuatro mesas. |
 | `sharky/firm_committee.py` | Comité y resolución del CIO. |
 | `sharky/claude_client.py` | Cliente de la API de Claude, con fallback declarado. |
+| `sharky/news_scanner.py` | Escaneo semanal de noticias de la cartera vía la tool de búsqueda web de Claude. |
 | `sharky/vault_manager.py` | Lectura y escritura de notas de Obsidian. |
 | `sharky/agent_loop.py` | Orquestación de los ciclos. |
 | `sharky/scheduler.py` | Servicio 24/7. |
+| `sharky/app/` | App de gestión: servidor local (librería estándar) + interfaz web adaptable. |
 
 ---
 
@@ -108,6 +117,7 @@ vault/
 ├── 03_Mesa_Cuantitativa_Riesgo/       # Política del CRO
 ├── 04_Operaciones_Bitacora/           # Operaciones registradas
 ├── 04_Sentimiento_Y_Flujos/           # Psicología y narrativas
+│   └── Noticias_Semanales/            #   Escaneo semanal de noticias por activo
 ├── 05_Diario_Reflexion/               # Actas diarias
 ├── 06_Lecciones_Aprendidas/           # Heurísticas
 ├── 07_Plantillas/                     # Plantillas
@@ -141,14 +151,23 @@ python -m sharky.cli portfolio
 # Auditoría de riesgo contra las reglas de supervivencia
 python -m sharky.cli risk
 
-# Vigilancia diaria: valoración, stop-loss, radar y diario en Obsidian
+# Control diario: valoración, stop-loss, radar y diario en Obsidian. Claude
+# sólo razona sobre posiciones, precios, valor de mercado y normas
 python -m sharky.cli daily
 
-# Propuesta de rebalanceo del Día 1 (qué vender y qué comprar)
+# Estudio mensual: plan de rebalanceo del Día 1 + reevaluación de posiciones
+# por Claude con todo el contexto del mes (diarios y noticias semanales)
 python -m sharky.cli monthly
+
+# Sólo el plan de rebalanceo del Día 1, sin llamar a Claude
+python -m sharky.cli rebalance
 
 # Sesión plenaria del Comité de Inversión con los cuatro departamentos
 python -m sharky.cli committee
+
+# Stop-loss y take-profit alcanzados hoy (no llama a la API de Claude,
+# así que puedes consultarlo tantas veces como quieras)
+python -m sharky.cli niveles
 
 # Alertas de oportunidad activas
 python -m sharky.cli alerts
@@ -156,13 +175,91 @@ python -m sharky.cli alerts
 # Termómetro macroeconómico (SPY, QQQ, TLT, GLD, USO)
 python -m sharky.cli macro
 
-# Ciclo diario para lanzar al encender el ordenador (ver §7): si el ciclo de
-# hoy ya se ejecutó, no vuelve a llamar a la API de Claude
+# Escaneo semanal de noticias relevantes para los activos en cartera, con el
+# contexto de los últimos 7 controles diarios (usa la tool de búsqueda web
+# de Claude; sin ANTHROPIC_API_KEY no se ejecuta)
+python -m sharky.cli noticias
+
+# Ciclo para lanzar al encender el ordenador (ver §7): si el control de hoy
+# ya se ejecutó, no vuelve a llamar a la API de Claude. Además lanza, si
+# toca, el escaneo semanal de noticias y el estudio mensual
 python -m sharky.cli startup
 
 # Servicio autónomo 24/7 (para un equipo que permanece siempre encendido)
 python -m sharky.cli service --interval 60
+
+# App de gestión (ver «App de gestión» más abajo)
+python -m sharky.cli app
 ```
+
+### App de gestión
+
+Todo lo anterior también se puede hacer desde una app con interfaz gráfica.
+Es un servidor local que reutiliza el mismo código que la CLI y se abre en
+una ventana propia de Edge (o Chrome):
+
+```powershell
+# Una sola vez: accesos directos «Sharky» en el Escritorio y en el menú Inicio
+powershell -ExecutionPolicy Bypass -File .\scripts\instalar_app_windows.ps1
+
+# O a mano, sin accesos directos
+python -m sharky.app
+```
+
+| Pantalla | Qué hace |
+| :--- | :--- |
+| **Panel** | Estado vital, NAV y drawdown, avisos que requieren atención (stops, incumplimientos, datos), evolución del NAV, los tres niveles de razonamiento con su última conclusión y un botón para lanzarlos, posiciones, exposición sectorial y oportunidades. |
+| **Informes** | Lector de todo lo que Sharky escribe en la bóveda (controles diarios, noticias, estudios, rebalanceos, operaciones, tesis, alertas), con los `[[enlaces]]` navegables. |
+| **Operar** | Registra una operación ya ejecutada en Trade Republic. Pasa por el RiskGovernor igual que `sharky trade`. |
+| **Sistema** | Perfiles de la IA, todas las acciones (con su coste estimado), historial y apagado. |
+
+- Las acciones largas (control diario, noticias, estudio mensual, comité)
+  corren en segundo plano, de una en una. Antes de ejecutarlas, la app
+  enseña su coste estimado y pide confirmación.
+- Escucha solo en `127.0.0.1:8765` (puerto configurable con
+  `SHARKY_APP_PORT`). Cada arranque genera un token de sesión que toda llamada
+  a la API debe llevar, y se comprueba la cabecera `Host`. Así, ninguna web
+  abierta en el navegador puede leer la cartera ni lanzar acciones contra la app.
+- Cerrar la ventana no detiene el servidor: usa **Sistema → Apagar la app**.
+- La interfaz se adapta a pantallas estrechas (navegación inferior), como
+  base para la versión móvil.
+
+### Stop-loss y take-profit
+
+El ciclo diario compara el precio de cada posición con los niveles declarados
+en su tesis y avisa **el mismo día en que se cruzan**. Los dos niveles no
+pesan lo mismo:
+
+| Nivel | Qué significa | Qué hace Sharky |
+| :--- | :--- | :--- |
+| **Stop-loss** | Salida obligatoria del mandato | Avisa y exige liquidar. Es la única excepción operativa intrames. |
+| **Take-profit** | Objetivo alcanzado | Avisa y **propone subir el stop**. No obliga a vender. |
+
+El stop propuesto al alcanzar el target es el mayor de dos criterios
+deterministas, y nunca queda por debajo del stop vigente:
+
+* **break-even** — el precio de entrada de la tesis: a partir de ahí la
+  operación ya no puede terminar en pérdida;
+* **trailing** — el precio actual menos el riesgo inicial de la tesis
+  (`entrada - stop`), que mantiene constante el riesgo abierto que el
+  `RiskGovernor` ya aprobó al abrir la posición. Si la tesis no declara
+  entrada o stop, cae a `SHARKY_TRAILING_STOP_PCT` (8% por defecto).
+
+La comparación se hace **siempre en EUR**. Una tesis declara sus niveles en la
+divisa de su frontmatter, que no tiene por qué ser la de cotización: el stop de
+MSFT vino del extracto en euros mientras la acción cotiza en dólares. Comparar
+ambos números sin convertirlos ordenaría liquidar posiciones sanas.
+
+Una posición sin cotización fiable **no se declara a salvo**: aparece como
+`no verificable`. Que no salte un aviso no puede significar dos cosas
+distintas.
+
+Los avisos salen por tres sitios a la vez:
+
+1. La cabecera de `daily` / `startup` en la consola, antes que el NAV.
+2. La sección `## 🎯 Niveles Alcanzados` de `Estado_Vital.md`, por delante de
+   los incumplimientos del mandato.
+3. Una ventana emergente al encender el ordenador (ver §7).
 
 ### Registrar una operación
 
@@ -255,9 +352,20 @@ workflow igual que lint/tests si aparece algo.
 ## 7. Arranque automático (Windows)
 
 Sharky no corre como servicio permanente: se lanza **una vez al día, al
-encender el ordenador e iniciar sesión**. Ejecuta el ciclo diario completo
-(mercados, cartera, stop-loss, radar de oportunidades, diario en Obsidian y,
-el día 1 de cada mes, la propuesta de rebalanceo) y actualiza la bóveda.
+encender el ordenador e iniciar sesión**. Ejecuta el control diario completo
+(cartera, stop-loss, radar de oportunidades y diario en Obsidian) y, cuando
+toca, el escaneo semanal de noticias y el estudio mensual.
+
+La IA razona en tres niveles, y cada uno pasa al siguiente sólo su
+conclusión (así el contexto de cada llamada no crece sin límite):
+
+| Nivel | Cuándo | Qué razona Claude | Perfil |
+| :--- | :--- | :--- | :--- |
+| Diario | Primer arranque del día | Posiciones, precios, valor de mercado y cumplimiento de normas | effort `low`, 8000 tokens |
+| Semanal | Domingo (o a los 7 días) | Noticias de la cartera + conclusiones de los últimos 7 controles; investiga primero lo que se movió más de ±7% | effort `medium`, 16000 tokens |
+| Mensual | Primer arranque del mes | Estudio completo y reevaluación de posiciones con los controles y escaneos del mes, contrastando el plan del motor de rebalanceo | effort `high`, 32000 tokens |
+
+Los perfiles se ajustan en `.env` (ver `.env.example`).
 
 ```powershell
 # Instalación (una sola vez, desde la carpeta del proyecto):
@@ -274,11 +382,39 @@ ciclo diario ya se completó y **no vuelve a invocar la API de Claude**: sólo
 la primera ejecución del día llama al modelo, el resto se limita a mostrar el
 estado actual. Los logs de cada arranque quedan en `logs/sharky_startup.log`.
 
+El mismo arranque también comprueba si toca el **escaneo semanal de
+noticias** de los activos en cartera (domingo por defecto,
+`SHARKY_NEWS_SCAN_WEEKDAY`). Como Sharky no corre como servicio permanente,
+`startup` es el único punto de entrada fiable para algo que debe pasar una
+vez por semana: si ese domingo no se encendió el ordenador, el escaneo se
+lanza igual en el primer arranque en cuanto pasan 7 días desde el último,
+para que no quede huérfano indefinidamente.
+
+Con el **estudio mensual** pasa lo mismo: lo lanza el primer arranque de cada
+mes, sea el día que sea. Si la API falló y el estudio salió sin Claude, se
+reintenta en un arranque posterior (como mucho una vez al día).
+
 ```powershell
 # Comprobar el registro / desinstalar
 schtasks /query /tn SharkyStartup
 schtasks /delete /tn SharkyStartup /f
 ```
+
+Si el ciclo detecta que alguna posición ha cruzado su stop-loss o su
+take-profit, `scripts\avisar_niveles_windows.ps1` muestra una **ventana
+emergente** con la lista al final del arranque. Lee lo que el propio ciclo
+acaba de escribir en `logs\alertas_niveles.json`, así que nunca puede enseñar
+números distintos de los del diario, y no vuelve a consultar el mercado. Si no
+hay ningún nivel cruzado -- el caso normal -- no aparece nada.
+
+El fichero se ignora si es de un día anterior: que el ciclo de hoy no llegara a
+escribirlo es competencia del heartbeat (más abajo), no de este aviso. Repetir
+aquí los stops de ayer sólo entrenaría a cerrar la ventana sin leerla.
+
+Encender el ordenador por segunda vez el mismo día no repite el ciclo, pero sí
+vuelve a comprobar los niveles: no cuesta una llamada a la API, y un stop
+cruzado a media tarde no puede esperar a mañana sólo porque el diario ya
+estuviera escrito.
 
 Cada ejecución de `SharkyStartup` termina con un backup local del vault
 (`scripts\backup_vault.ps1`, retiene las últimas 14 copias en `backups\`,
@@ -324,15 +460,27 @@ que la zona horaria (`TZ`) es explícita en el contenedor.
 ```env
 ANTHROPIC_API_KEY=sk-ant-api03-...
 CLAUDE_MODEL=claude-sonnet-5      # o claude-opus-5 para el rol de CIO
-SHARKY_BASE_CURRENCY=EUR
-SHARKY_EXECUTION_MODE=PAPER       # PAPER | REAL
 ```
+
+El escaneo semanal de noticias (`sharky noticias`) usa `CLAUDE_MODEL` por
+defecto; se puede fijar aparte con `SHARKY_NEWS_MODEL`, y el día de la
+semana con `SHARKY_NEWS_SCAN_WEEKDAY` (0=lunes ... 6=domingo). Igual que el
+resto de la inteligencia de Sharky, sin `ANTHROPIC_API_KEY` no se ejecuta.
+
+Sharky no tiene modo simulación: toda operación registrada con `sharky trade`
+es una compra o venta real que ya ejecutaste en Trade Republic, y se asienta
+como tal en `Cartera_Real.md`.
 
 Sin API key el sistema **sigue siendo funcional**: calcula NAV, riesgo,
 incumplimientos y rebalanceo de forma determinista. Lo único que pierde es la
 interpretación, y los informes lo indican. Con
 `SHARKY_ALLOW_SIMULATED_INTELLIGENCE=false` un fallo de la API interrumpe la
 ejecución en lugar de generar prosa de plantilla.
+
+El trailing de reserva del take-profit se fija con `SHARKY_TRAILING_STOP_PCT`
+(8% por defecto); sólo se usa en tesis que no declaran precio de entrada o
+stop, porque en el resto el trailing sale del riesgo inicial de la propia
+tesis.
 
 Los límites de riesgo se pueden sobrescribir por variable de entorno, pero sus
 valores por defecto replican `Reglas_De_Supervivencia.md`. Si cambias uno,

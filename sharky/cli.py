@@ -19,7 +19,6 @@ from sharky.agent_loop import SharkyAgent  # noqa: E402
 from sharky.config import (  # noqa: E402
     BASE_CURRENCY,
     CLAUDE_MODEL,
-    EXECUTION_MODE,
     MAX_POSITION_SIZE_PCT,
     MAX_SECTOR_SIZE_PCT,
     MIN_CASH_PCT,
@@ -57,6 +56,39 @@ def _valor_enum(v) -> str:
     return str(getattr(v, "value", v))
 
 
+def _niveles(res: dict) -> None:
+    """Bloque de niveles alcanzados, lo primero que se imprime del ciclo.
+
+    Va por delante del NAV y del estado vital a propósito: un stop cruzado es
+    lo único de toda la salida que exige actuar hoy, y hasta 2026-09 aparecía
+    al final, después de la tabla del radar. Un aviso que hay que buscar
+    haciendo scroll no es un aviso.
+    """
+    avisos = res.get("avisos_niveles") or []
+    stops = res.get("stops_alcanzados", 0)
+    targets = res.get("targets_alcanzados", 0)
+
+    if not avisos:
+        print("\n🎯 NIVELES: ninguna posición ha tocado su stop-loss ni su target.")
+        return
+
+    print("\n" + SEP)
+    titulo = []
+    if stops:
+        titulo.append(f"{stops} STOP-LOSS")
+    if targets:
+        titulo.append(f"{targets} TARGET")
+    print(f"🎯 NIVELES ALCANZADOS — {' | '.join(titulo) if titulo else 'REVISAR'}")
+    print(SEP)
+    for aviso in avisos:
+        print(f"  {aviso}")
+    if stops:
+        print(SUB)
+        print("  ⛔ El mandato exige liquidar las posiciones con el stop cruzado.")
+        print("     Ejecuta en Trade Republic y regístralo: `sharky trade venta ...`")
+    print(SEP)
+
+
 def _avisos(advertencias) -> None:
     if not advertencias:
         return
@@ -89,7 +121,6 @@ def cmd_status(agent: SharkyAgent) -> None:
     print("  Firma              : Sharky Capital Management")
     print(f"  Bóveda de Obsidian : {VAULT_PATH}")
     print(f"  Divisa base        : {BASE_CURRENCY}")
-    print(f"  Modo de ejecución  : {EXECUTION_MODE}")
     print(f"  CIO (Claude)       : {(CLAUDE_MODEL + ' — API conectada') if has_live_api_key() else 'Modo simulación (sin API key)'}")
     print(SUB)
     print(f"  Estado Vital       : {health.estado_vital.value}  (salud {health.salud_porcentaje:.1f}%)")
@@ -204,18 +235,39 @@ def cmd_startup(agent: SharkyAgent) -> None:
     Si Sharky ya completó su ciclo diario hoy (p.ej. porque el ordenador se ha
     reiniciado varias veces), no vuelve a ejecutarlo: la API de Claude se
     invoca como máximo una vez al día, sin importar cuántas veces arranque.
+
+    Además, si toca, lanza en el mismo arranque el escaneo semanal de
+    noticias (`SharkyAgent.noticias_semanales_pendiente`) y después el
+    estudio mensual (`SharkyAgent.estudio_mensual_pendiente`), en ese orden
+    para que el estudio lea las noticias más recientes. Sharky no corre como
+    servicio permanente, así que este es el único punto de entrada fiable
+    para lo que debe pasar una vez por semana o por mes.
     """
     if agent.ya_completo_ciclo_hoy():
         print("\n[Sharky] ℹ️  El ciclo diario de hoy ya se completó. No se vuelve a llamar a la API de Claude.\n")
         cmd_status(agent)
-        return
-    cmd_cycle(agent)
+        # Los niveles sí se revisan otra vez: no cuesta una llamada a la API,
+        # y un stop cruzado a media tarde no puede esperar a mañana sólo
+        # porque el diario de hoy ya estuviera escrito.
+        cmd_niveles(agent)
+    else:
+        cmd_cycle(agent)
+
+    if agent.noticias_semanales_pendiente():
+        cmd_news(agent)
+
+    if agent.estudio_mensual_pendiente():
+        cmd_monthly(agent)
 
 
 def cmd_cycle(agent: SharkyAgent) -> None:
     print("\n[Sharky] 🛰️  Iniciando vigilancia diaria...")
     res = agent.run_daily_cycle()
-    print("[Sharky] ✅ Sesión completada.\n")
+    print("[Sharky] ✅ Sesión completada.")
+
+    _niveles(res)
+
+    print()
     print(f"  Estado Vital       : {res['estado_vital']} (salud {res['salud']:.1f}%)")
     print(f"  Energía            : {res['energia']:.1f} / 100.0")
     print(f"  NAV                : {res['nav_eur']:,.2f} €")
@@ -241,14 +293,28 @@ def cmd_cycle(agent: SharkyAgent) -> None:
         for t in res["diagnostico_radar"]:
             print(f"   {t['ticker']:<8} [{t['veredicto']}] {t['detalle']}")
 
-    if res["alertas_stop_loss"]:
-        print()
-        for a in res["alertas_stop_loss"]:
-            print(f"  {a}")
+    if res["posiciones_a_vigilar"]:
+        print(
+            "\n  👀 A vigilar en el escaneo semanal: " + ", ".join(res["posiciones_a_vigilar"])
+        )
 
-    if res["rebalanceo_generado"]:
-        print(f"\n  📅 REBALANCEO DEL DÍA 1 GENERADO: {res['rebalanceo_generado']}")
+    _avisos(res["advertencias"])
+    print()
 
+
+def cmd_niveles(agent: SharkyAgent) -> None:
+    """Comprueba stop-loss y take-profit sin escribir el diario.
+
+    No consume la API de Claude: sólo valora la cartera y compara. Pensado
+    para consultarlo tantas veces al día como quieras.
+    """
+    res = agent.revisar_niveles_ahora()
+    _niveles(res)
+    if res["cobertura_datos_pct"] < 100.0:
+        print(
+            f"\n  ⚠️  Sólo el {res['cobertura_datos_pct']:.1f}% del NAV tiene cotización "
+            "fiable: los niveles del resto no se han podido comprobar."
+        )
     _avisos(res["advertencias"])
     print()
 
@@ -274,9 +340,28 @@ def cmd_alerts(agent: SharkyAgent) -> None:
 
 
 def cmd_monthly(agent: SharkyAgent) -> None:
+    """Estudio mensual completo: plan del motor + reevaluación de Claude."""
+    print("\n[Sharky] 🧠 Estudio mensual: plan de rebalanceo y reevaluación de posiciones...")
+    res = agent.run_monthly_study()
+    if res["estudio_simulado"]:
+        print(f"[Sharky] ⚠️  Estudio de {res['mes']} SIN Claude: sólo el plan determinista.")
+        if res["estudio_error"]:
+            print(f"           Motivo: {res['estudio_error']}")
+    else:
+        print(f"[Sharky] ✅ Estudio de {res['mes']} completado ({res['modelo']}).")
+    print(f"  Estudio            : {res['estudio_guardado']}")
+    _imprimir_plan(res)
+
+
+def cmd_rebalance(agent: SharkyAgent) -> None:
+    """Sólo el plan determinista del motor, sin llamar a Claude."""
     print("\n[Sharky] 📅 Generando propuesta de rebalanceo del Día 1...")
     res = agent.generate_monthly_rebalance()
     print(f"[Sharky] ✅ Propuesta para {res['mes_ano']} generada.\n")
+    _imprimir_plan(res)
+
+
+def _imprimir_plan(res: dict) -> None:
     print(f"  Informe            : {res['archivo_informe']}")
     print(f"  NAV total          : {res['nav_total_eur']:,.2f} €")
     print(f"  Caja objetivo      : {res['cash_objetivo_pct']:.2f}% ({res['cash_objetivo_eur']:,.2f} €)")
@@ -326,6 +411,32 @@ def cmd_macro(agent: SharkyAgent) -> None:
     print(SEP + "\n")
 
 
+def cmd_news(agent: SharkyAgent) -> None:
+    """Escaneo semanal de noticias relevantes para los activos en cartera.
+
+    A diferencia de `daily`, no hay resultado determinista sin API: sin
+    `ANTHROPIC_API_KEY` en vivo el escaneo no busca nada y lo dice, en vez de
+    fingir un análisis que no ocurrió.
+    """
+    print("\n[Sharky] 📰 Buscando noticias de la semana para los activos en cartera...")
+    res = agent.run_weekly_news_scan()
+    if not res["activos_analizados"]:
+        print("[Sharky] ℹ️  Sin posiciones en cartera: nada que buscar.\n")
+        return
+    if not res["disponible"]:
+        print(f"[Sharky] ⚠️  Escaneo no disponible: {res['error']}")
+        print("           Configura ANTHROPIC_API_KEY en `.env` para que se ejecute de verdad.\n")
+        return
+    print(f"[Sharky] ✅ Escaneo completado ({res['modelo']}).\n")
+    print(f"  Activos analizados : {', '.join(res['activos_analizados'])}")
+    print(f"  Contexto           : {res['dias_de_contexto']} control(es) diario(s)")
+    if res["prioritarios"]:
+        print(f"  Investigados antes : {', '.join(res['prioritarios'])}")
+    print(f"  Búsquedas web      : {res['busquedas_realizadas']}")
+    print(f"  Fuentes citadas    : {res['num_fuentes']}")
+    print(f"  Nota guardada      : {res['nota_guardada']}\n")
+
+
 def cmd_trade(agent: SharkyAgent, args) -> None:
     """Registra una operación ya ejecutada en el broker."""
     recorder = TradeRecorder(
@@ -345,6 +456,7 @@ def cmd_trade(agent: SharkyAgent, args) -> None:
         unidades=args.unidades,
         precio=args.precio,
         divisa=args.divisa,
+        divisa_niveles=args.divisa_niveles,
         comision_eur=args.comision,
         stop_loss=args.stop or 0.0,
         target_precio=args.target or 0.0,
@@ -434,10 +546,20 @@ def build_parser() -> argparse.ArgumentParser:
         "startup",
         help="Ciclo diario para lanzar al encender el ordenador (omite el ciclo si ya se hizo hoy)",
     )
+    sub.add_parser(
+        "niveles",
+        help="Comprueba stop-loss y take-profit de las tesis abiertas (sin llamar a Claude)",
+    )
+    sub.add_parser("levels", help="Alias de niveles")
     sub.add_parser("alerts", help="Alertas de oportunidad activas")
-    sub.add_parser("monthly", help="Propuesta de rebalanceo del Día 1")
-    sub.add_parser("rebalance", help="Alias de monthly")
+    sub.add_parser("monthly", help="Estudio mensual: rebalanceo del Día 1 + reevaluación de posiciones con Claude")
+    sub.add_parser("rebalance", help="Sólo el plan de rebalanceo del Día 1, sin Claude")
     sub.add_parser("macro", help="Termómetro macroeconómico (SPY, QQQ, TLT, GLD, USO)")
+    sub.add_parser(
+        "noticias",
+        help="Escaneo semanal de noticias relevantes para los activos en cartera",
+    )
+    sub.add_parser("news", help="Alias de noticias")
 
     p_trade = sub.add_parser(
         "trade",
@@ -448,6 +570,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_trade.add_argument("unidades", type=float, help="Títulos operados")
     p_trade.add_argument("precio", type=float, help="Precio de ejecución en la divisa de cotización")
     p_trade.add_argument("--divisa", help="Divisa de ejecución (por defecto: la de la posición)")
+    p_trade.add_argument(
+        "--divisa-niveles",
+        help="Divisa en la que se han dado --stop/--target, si es distinta de --divisa "
+        "(se convierten a la divisa de ejecución antes de validar la orden)",
+    )
     p_trade.add_argument("--comision", type=float, default=0.0, help="Comisión en EUR")
     p_trade.add_argument("--stop", type=float, help="Stop-loss (obligatorio en compras)")
     p_trade.add_argument("--target", type=float, help="Objetivo (obligatorio en compras)")
@@ -478,6 +605,10 @@ def build_parser() -> argparse.ArgumentParser:
         p = sub.add_parser(nombre, help="Servicio autónomo 24/7")
         p.add_argument("--interval", type=int, default=60, help="Minutos entre escaneos (defecto: 60)")
 
+    p_app = sub.add_parser("app", help="Abre la app de gestión (servidor local + ventana)")
+    p_app.add_argument("--puerto", type=int, default=None, help="Puerto local (defecto: 8765)")
+    p_app.add_argument("--no-abrir", action="store_true", help="Sólo el servidor, sin abrir ventana")
+
     return parser
 
 
@@ -488,6 +619,14 @@ def main() -> int:
     if args.command in ("service", "daemon"):
         cmd_service(getattr(args, "interval", 60))
         return 0
+
+    if args.command == "app":
+        from sharky.app.servidor import main as app_main
+
+        argumentos = ["--no-abrir"] if args.no_abrir else []
+        if args.puerto:
+            argumentos += ["--puerto", str(args.puerto)]
+        return app_main(argumentos)
 
     try:
         agent = SharkyAgent()
@@ -504,10 +643,14 @@ def main() -> int:
         "daily": lambda: cmd_cycle(agent),
         "cycle": lambda: cmd_cycle(agent),
         "startup": lambda: cmd_startup(agent),
+        "niveles": lambda: cmd_niveles(agent),
+        "levels": lambda: cmd_niveles(agent),
         "alerts": lambda: cmd_alerts(agent),
         "monthly": lambda: cmd_monthly(agent),
-        "rebalance": lambda: cmd_monthly(agent),
+        "rebalance": lambda: cmd_rebalance(agent),
         "macro": lambda: cmd_macro(agent),
+        "noticias": lambda: cmd_news(agent),
+        "news": lambda: cmd_news(agent),
         "trade": lambda: cmd_trade(agent, args),
         "resolve-isin": lambda: cmd_resolve_isin(agent, args),
     }

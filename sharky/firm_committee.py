@@ -41,7 +41,12 @@ class InvestmentCommittee:
         valuation: Optional[PortfolioValuation] = None,
         incumplimientos: Optional[List[RiskBreach]] = None,
         theses_count: int = 0,
+        noticias_recientes: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        """`noticias_recientes` es el resultado de
+        `VaultManager.leer_ultimas_noticias_semanales`: se añade al dossier
+        para que el veredicto del CIO tenga en cuenta lo que ha pasado esta
+        semana en cada activo, no sólo precios y reglas de riesgo."""
         informes = [
             self.macro_desk.generate_report(macro_snapshots),
             self.fundamental_desk.evaluate_equity_universe(market_snapshots),
@@ -50,6 +55,10 @@ class InvestmentCommittee:
         ]
 
         dossier = self._construir_dossier(informes)
+        dossier += (
+            "\n\n### 📰 Noticias Recientes de la Cartera\n"
+            + ClaudeBrainClient._formatear_noticias(noticias_recientes)
+        )
         fallback = self._veredicto_determinista(health, informes, incumplimientos or [])
         veredicto = self.claude.synthesize_cio_verdict(health, dossier, fallback)
 

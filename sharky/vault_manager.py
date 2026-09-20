@@ -9,10 +9,11 @@ valoradas a coste, análisis simulado), la nota lo declara de forma visible.
 from pathlib import Path
 import re
 from typing import Any, Dict, List, Optional, Tuple
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import yaml
 
+from sharky.atomic_io import atomic_write_text
 from sharky.config import (
     BREACH_ESCALATION_DAYS,
     DRAWDOWN_ALERTA_MAX_PCT,
@@ -25,10 +26,13 @@ from sharky.models import (
     AlertStatus,
     HealthStatus,
     InvestmentThesis,
+    LevelAlert,
+    LevelKind,
     MonthlyRebalanceReport,
     OpportunityAlert,
     OrderType,
     PortfolioValuation,
+    Position,
     PriceSource,
     RebalanceAction,
     RiskBreach,
@@ -36,6 +40,9 @@ from sharky.models import (
     VitalState,
 )
 from sharky.config import VAULT_PATH
+from sharky.level_watch import texto as texto_nivel
+from sharky.claude_client import CONCLUSION_SEMANA, IntelligenceResult, extraer_conclusion
+from sharky.news_scanner import NewsScanResult
 
 ICONOS_VITALES = {
     VitalState.OPTIMO: "🟢",
@@ -137,6 +144,7 @@ class VaultManager:
             "03_Mesa_Cuantitativa_Riesgo",
             "04_Operaciones_Bitacora",
             "04_Sentimiento_Y_Flujos",
+            "04_Sentimiento_Y_Flujos/Noticias_Semanales",
             "05_Diario_Reflexion",
             "06_Lecciones_Aprendidas",
             "07_Plantillas",
@@ -175,16 +183,17 @@ class VaultManager:
     def read_health_status(self) -> HealthStatus:
         """Lee Estado_Vital.md. Tolera el esquema antiguo en USD.
 
-        Sin fichero o sin metadatos legibles, `ultima_actualizacion` se fija a
-        `datetime.min` (no al modelo por defecto, que sería "ahora"): así una
-        bóveda nueva nunca se confunde con "el ciclo de hoy ya se ejecutó".
+        Sin fichero o sin metadatos legibles, `ultima_actualizacion` y
+        `ultimo_ciclo_diario` se fijan a `datetime.min` (no al modelo por
+        defecto, que sería "ahora"): así una bóveda nueva nunca se confunde
+        con "el ciclo de hoy ya se ejecutó".
         """
         if not self.health_path.exists():
-            return HealthStatus(ultima_actualizacion=datetime.min)
+            return HealthStatus(ultima_actualizacion=datetime.min, ultimo_ciclo_diario=datetime.min)
 
         meta, _ = self.parse_markdown(self.health_path.read_text(encoding="utf-8"))
         if not meta:
-            return HealthStatus(ultima_actualizacion=datetime.min)
+            return HealthStatus(ultima_actualizacion=datetime.min, ultimo_ciclo_diario=datetime.min)
 
         def num(*claves, defecto: float = 0.0) -> float:
             for c in claves:
@@ -219,6 +228,17 @@ class VaultManager:
             except ValueError:
                 pass
 
+        # Igual que `ultima_actualizacion`, pero sólo lo escribe `run_daily_cycle`
+        # (ver `update_health_status`): es lo que decide si el ciclo de hoy ya
+        # corrió, sin que una operación registrada de por medio lo confunda.
+        ultimo_ciclo_diario = datetime.min
+        crudo_ciclo = meta.get("ultimo_ciclo_diario")
+        if crudo_ciclo:
+            try:
+                ultimo_ciclo_diario = datetime.fromisoformat(str(crudo_ciclo))
+            except ValueError:
+                pass
+
         return HealthStatus(
             estado_vital=estado,
             salud_porcentaje=min(100.0, max(0.0, num("salud_porcentaje", defecto=100.0))),
@@ -240,6 +260,7 @@ class VaultManager:
             alertas_activas_count=len(self.list_active_alerts()),
             cobertura_datos_pct=num("cobertura_datos_pct", defecto=100.0),
             ultima_actualizacion=ultima_actualizacion,
+            ultimo_ciclo_diario=ultimo_ciclo_diario,
         )
 
     def update_health_status(
@@ -247,11 +268,28 @@ class VaultManager:
         health: HealthStatus,
         valuation: Optional[PortfolioValuation] = None,
         incumplimientos: Optional[List[RiskBreach]] = None,
+        alertas_niveles: Optional[List[LevelAlert]] = None,
         extra_summary: str = "",
+        ciclo_diario: bool = False,
     ) -> Path:
-        """Reescribe el cuadro de mandos Estado_Vital.md."""
+        """Reescribe el cuadro de mandos Estado_Vital.md.
+
+        `ciclo_diario=True` sólo lo pasa `run_daily_cycle`: es la única
+        llamada que debe marcar "el ciclo de hoy ya se ejecutó"
+        (`ultimo_ciclo_diario`). Cualquier otra escritura -- p.ej.
+        `TradeRecorder` tras registrar una operación -- preserva el valor
+        anterior tal cual (ver CICLO-2).
+        """
         alertas = self.list_active_alerts()
         incumplimientos = incumplimientos or []
+        alertas_niveles = alertas_niveles or []
+
+        ultimo_ciclo_previo = "1970-01-01T00:00:00"
+        if self.health_path.exists():
+            meta_previo, _ = self.parse_markdown(self.health_path.read_text(encoding="utf-8"))
+            ultimo_ciclo_previo = str(
+                (meta_previo or {}).get("ultimo_ciclo_diario", ultimo_ciclo_previo)
+            )
 
         # Antigüedad de cada incumplimiento: cuánto lleva abierto, no sólo si
         # está abierto hoy. Ver `_actualizar_antiguedad_incumplimientos`.
@@ -280,10 +318,22 @@ class VaultManager:
             "win_rate_pct": round(health.win_rate_pct, 2),
             "alertas_activas_count": len(alertas),
             "cobertura_datos_pct": round(health.cobertura_datos_pct, 2),
+            "stops_alcanzados": sum(
+                1 for a in alertas_niveles if a.tipo is LevelKind.STOP_LOSS
+            ),
+            "targets_alcanzados": sum(
+                1 for a in alertas_niveles if a.tipo is LevelKind.TAKE_PROFIT
+            ),
+            "niveles_no_verificables": sum(
+                1 for a in alertas_niveles if a.tipo is LevelKind.NO_VERIFICABLE
+            ),
             "incumplimientos_activos": len(incumplimientos),
             "incumplimientos_escalados": len(escaladas),
             "incumplimientos_desde": antiguedad,
             "ultima_actualizacion": datetime.now().isoformat(),
+            "ultimo_ciclo_diario": (
+                datetime.now().isoformat() if ciclo_diario else ultimo_ciclo_previo
+            ),
         }
 
         icono = ICONOS_VITALES.get(health.estado_vital, "❔")
@@ -301,6 +351,9 @@ class VaultManager:
 
         if valuation:
             secciones.append(self._render_positions_section(valuation))
+
+        if alertas_niveles:
+            secciones.append(self._render_levels_section(alertas_niveles))
 
         if incumplimientos:
             secciones.append(self._render_breaches_section(incumplimientos_con_edad))
@@ -359,7 +412,7 @@ class VaultManager:
 * Mandato: [[Mandato_Institucional]], [[Reglas_De_Supervivencia]]
 * Tesis: [[01_Tesis_Activas]] | Operaciones: [[04_Operaciones_Bitacora]]
 """
-        self.health_path.write_text(self.build_markdown(meta, cuerpo), encoding="utf-8")
+        atomic_write_text(self.health_path, self.build_markdown(meta, cuerpo), encoding="utf-8")
         return self.health_path
 
     def _render_positions_section(self, v: PortfolioValuation) -> str:
@@ -418,6 +471,50 @@ class VaultManager:
         for clave in claves_activas:
             actualizado.setdefault(clave, hoy)
         return actualizado
+
+    def _render_levels_section(self, alertas: List[LevelAlert]) -> str:
+        """Sección de niveles alcanzados del cuadro de mandos.
+
+        Va por delante de los incumplimientos del mandato porque un stop
+        cruzado es la única cosa de esta nota que exige actuar hoy: un tope
+        de concentración excedido se corrige en el rebalanceo, un stop no.
+        """
+        stops = [a for a in alertas if a.tipo is LevelKind.STOP_LOSS]
+        targets = [a for a in alertas if a.tipo is LevelKind.TAKE_PROFIT]
+        mudos = [a for a in alertas if a.tipo is LevelKind.NO_VERIFICABLE]
+
+        bloques: List[str] = []
+
+        if stops:
+            detalle = "\n".join(f"> - {texto_nivel(a, self.enlace)}" for a in stops)
+            bloques.append(
+                "> [!DANGER] Salida obligatoria\n"
+                f"> **{len(stops)} posición(es) han cruzado su stop-loss.** El mandato "
+                "no admite discreción aquí: se liquidan.\n"
+                f"{detalle}"
+            )
+
+        if targets:
+            detalle = "\n".join(f"> - {texto_nivel(a, self.enlace)}" for a in targets)
+            bloques.append(
+                "> [!TIP] Objetivo alcanzado\n"
+                f"> **{len(targets)} posición(es) han alcanzado su target.** Esto NO obliga "
+                "a vender: el stop propuesto deja correr la posición sin arriesgar el "
+                "principal ya ganado.\n"
+                f"{detalle}"
+            )
+
+        if mudos:
+            detalle = "\n".join(f"> - {texto_nivel(a, self.enlace)}" for a in mudos)
+            bloques.append(
+                "> [!WARNING] Niveles sin verificar\n"
+                f"> **{len(mudos)} tesis no se han podido comprobar hoy.** Que no aparezca "
+                "un aviso no significa que el nivel no se haya cruzado.\n"
+                f"{detalle}"
+            )
+
+        cuerpo = "\n\n".join(bloques)
+        return f"## 🎯 Niveles Alcanzados ({len(stops)} stop / {len(targets)} target)\n\n{cuerpo}"
 
     @staticmethod
     def _render_breaches_section(
@@ -489,6 +586,81 @@ class VaultManager:
             entradas.append(meta)
         entradas.sort(key=lambda m: str(m.get("fecha", "")))
         return entradas
+
+    def leer_ultimas_noticias_semanales(self) -> Optional[Dict[str, Any]]:
+        """Último escaneo de noticias: fecha, disponibilidad y resumen por activo.
+
+        Es la base con la que `SharkyAgent.noticias_semanales_pendiente`
+        decide si toca lanzar el escaneo de esta semana, y también el
+        contexto que recibe el Comité de Inversión (el estudio mensual lee
+        todas las semanas del mes con `leer_noticias_semanales`), para que
+        las noticias reales pesen en sus lecturas, no sólo queden archivadas
+        en `Noticias_Semanales/` sin que nadie las use. `resumen` es sólo la
+        sección "1. Resumen por Activo"
+        del cuerpo -- sin las fuentes citadas ni los enlaces del grafo, que
+        no aportan nada a un prompt y sólo gastarían tokens.
+        """
+        carpeta = self.vault_path / "04_Sentimiento_Y_Flujos" / "Noticias_Semanales"
+        if not carpeta.exists():
+            return None
+        elegido: Optional[Dict[str, Any]] = None
+        for file in carpeta.glob("*_Noticias_Semanales.md"):
+            try:
+                meta, cuerpo = self.parse_markdown(file.read_text(encoding="utf-8"))
+            except OSError:
+                continue
+            try:
+                fecha = datetime.strptime(str(meta.get("fecha", "")), "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if elegido is None or fecha > elegido["fecha"]:
+                elegido = {
+                    "fecha": fecha,
+                    "disponible": bool(meta.get("disponible", True)),
+                    "resumen": self._extraer_resumen_noticias(cuerpo),
+                }
+        return elegido
+
+    def leer_noticias_semanales(self, dias: int) -> List[Dict[str, Any]]:
+        """Escaneos semanales de los últimos `dias` días, del más antiguo al
+        más reciente. Es el contexto de noticias del estudio mensual: todas
+        las semanas del mes, no sólo la última."""
+        carpeta = self.vault_path / "04_Sentimiento_Y_Flujos" / "Noticias_Semanales"
+        if dias <= 0 or not carpeta.exists():
+            return []
+        corte = date.today() - timedelta(days=dias)
+        escaneos: List[Dict[str, Any]] = []
+        for file in carpeta.glob("*_Noticias_Semanales.md"):
+            try:
+                meta, cuerpo = self.parse_markdown(file.read_text(encoding="utf-8"))
+                fecha = datetime.strptime(str(meta.get("fecha", "")), "%Y-%m-%d").date()
+            except (OSError, ValueError):
+                continue
+            if fecha < corte:
+                continue
+            escaneos.append({
+                "fecha": fecha,
+                "disponible": bool(meta.get("disponible", True)),
+                "resumen": self._extraer_resumen_noticias(cuerpo),
+                "conclusion": str(meta.get("conclusion_semana") or ""),
+            })
+        escaneos.sort(key=lambda e: e["fecha"])
+        return escaneos
+
+    def leer_ultima_fecha_noticias_semanales(self) -> Optional[date]:
+        """Sólo la fecha del último escaneo. Ver `leer_ultimas_noticias_semanales`."""
+        elegido = self.leer_ultimas_noticias_semanales()
+        return elegido["fecha"] if elegido else None
+
+    @staticmethod
+    def _extraer_resumen_noticias(cuerpo: str) -> str:
+        """Aísla la sección "1. Resumen por Activo" del cuerpo de la nota."""
+        inicio = cuerpo.find("## 1. Resumen por Activo")
+        if inicio == -1:
+            return cuerpo.strip()
+        fin = cuerpo.find("## 2. Fuentes Citadas", inicio)
+        fragmento = cuerpo[inicio:fin if fin != -1 else None]
+        return fragmento.replace("## 1. Resumen por Activo", "", 1).strip()
 
     def list_active_theses(self) -> List[Tuple[Path, InvestmentThesis]]:
         """Tesis con `estado: Activa`.
@@ -661,7 +833,7 @@ class VaultManager:
 * Activo: {self.enlace(alert.ticker)} | MOC: [[09_Alertas_Oportunidades]]
 * Riesgo: [[Politica_Control_Riesgo]] | Cartera: [[Cartera_Real]]
 """
-        file_path.write_text(self.build_markdown(meta, cuerpo), encoding="utf-8")
+        atomic_write_text(file_path, self.build_markdown(meta, cuerpo), encoding="utf-8")
         self._append_to_moc(
             "09_Alertas_Oportunidades",
             "## 🔥 Alertas Activas en Radar",
@@ -683,13 +855,12 @@ class VaultManager:
         sentido = order.tipo_orden.value
         file_path = (
             self.vault_path / "04_Operaciones_Bitacora"
-            / f"{fecha}_{order.modo.value}_{order.ticker}_{sentido}_{order.id_operacion}.md"
+            / f"{fecha}_{order.ticker}_{sentido}_{order.id_operacion}.md"
         )
 
         meta = {
             "tipo": "operacion",
             "id_operacion": order.id_operacion,
-            "modo": order.modo.value,
             "ticker": order.ticker,
             "tipo_orden": sentido,
             "fecha_ejecucion": order.fecha_ejecucion.isoformat(),
@@ -726,10 +897,11 @@ class VaultManager:
         cuerpo = f"""# 🧾 Operación {sentido}: {order.ticker}
 
 > [!NOTE]
-> **Modo:** `{order.modo.value}` | **ID:** `{order.id_operacion}`
+> **ID:** `{order.id_operacion}`
 > **Ejecutada:** {order.fecha_ejecucion.strftime('%Y-%m-%d %H:%M:%S')}
 > Sharky **no** envía órdenes al broker: esta nota registra una ejecución ya
-> realizada en {self._custodio_hint()}.
+> realizada en {self._custodio_hint()}. No existe modo simulación: toda
+> entrada es una compra o venta real, asentada en [[Cartera_Real]].
 
 ---
 
@@ -766,7 +938,7 @@ class VaultManager:
 * Cartera: [[Cartera_Real]] | Riesgo: [[Politica_Control_Riesgo]]
 * MOC: [[04_Operaciones_Bitacora]]
 """
-        file_path.write_text(self.build_markdown(meta, cuerpo), encoding="utf-8")
+        atomic_write_text(file_path, self.build_markdown(meta, cuerpo), encoding="utf-8")
         self._append_to_moc(
             "04_Operaciones_Bitacora",
             "## 📋 Operaciones Registradas",
@@ -932,11 +1104,112 @@ Verificado de forma determinista contra [[Reglas_De_Supervivencia]]:
 * Mandato: [[Mandato_Institucional]], [[Reglas_De_Supervivencia]]
 * Tesis: [[01_Tesis_Activas]] | Riesgo: [[Politica_Control_Riesgo]], [[Estado_Vital]]
 """
-        file_path.write_text(self.build_markdown(meta, cuerpo), encoding="utf-8")
+        atomic_write_text(file_path, self.build_markdown(meta, cuerpo), encoding="utf-8")
         self._append_to_moc(
             "08_Rebalanceos_Mensuales",
             "## 📋 Informes de Rebalanceo Emitidos",
             f"* 📅 [[{file_path.stem}]] ({report.mes_ano})",
+        )
+        return file_path
+
+    # ------------------------------------------------------------------
+    # Estudio mensual
+    # ------------------------------------------------------------------
+    def _ruta_estudio_mensual(self, mes: str) -> Path:
+        """`mes` en formato `YYYY-MM`. Nombre de archivo = fuente de verdad
+        de si el estudio de ese mes ya se hizo (ver `existe_estudio_mensual`)."""
+        return self.vault_path / "08_Rebalanceos_Mensuales" / f"{mes}_Estudio_Mensual.md"
+
+    def existe_estudio_mensual(self, mes: str) -> bool:
+        return self._ruta_estudio_mensual(mes).exists()
+
+    def leer_meta_estudio_mensual(self, mes: str) -> Dict[str, Any]:
+        """Frontmatter del estudio de `mes`, o {} si no existe o no se lee."""
+        ruta = self._ruta_estudio_mensual(mes)
+        if not ruta.exists():
+            return {}
+        try:
+            meta, _ = self.parse_markdown(ruta.read_text(encoding="utf-8"))
+        except OSError:
+            return {}
+        return meta or {}
+
+    def leer_conclusion_estudio_anterior(self, mes: str) -> str:
+        """Conclusión del último estudio mensual anterior a `mes` (`YYYY-MM`).
+
+        Da continuidad entre estudios: el de este mes puede comprobar si las
+        decisiones del anterior funcionaron.
+        """
+        carpeta = self.vault_path / "08_Rebalanceos_Mensuales"
+        anteriores = sorted(
+            f for f in carpeta.glob("*_Estudio_Mensual.md") if f.name[:7] < mes
+        ) if carpeta.exists() else []
+        if not anteriores:
+            return ""
+        try:
+            meta, _ = self.parse_markdown(anteriores[-1].read_text(encoding="utf-8"))
+        except OSError:
+            return ""
+        return str(meta.get("conclusion_mes") or "")
+
+    def write_monthly_study(
+        self,
+        mes: str,
+        fecha_str: str,
+        resultado: IntelligenceResult,
+        health: HealthStatus,
+        ruta_rebalanceo: Optional[Path] = None,
+    ) -> Path:
+        """Estudio mensual completo de la cartera, junto al plan del motor."""
+        file_path = self._ruta_estudio_mensual(mes)
+
+        meta = {
+            "tipo": "estudio_mensual",
+            "mes": mes,
+            "fecha": fecha_str,
+            "modelo": resultado.modelo,
+            "inteligencia_simulada": resultado.simulado,
+            "nav_eur": round(health.nav_actual_eur, 2),
+            "drawdown_actual_pct": round(health.drawdown_actual_pct, 2),
+            "conclusion_mes": resultado.conclusion.strip(),
+        }
+
+        aviso = ""
+        if resultado.simulado:
+            aviso = (
+                "\n> [!WARNING]\n"
+                "> **Estudio generado sin Claude.** No hay reevaluación de posiciones,\n"
+                "> sólo el plan determinista del motor de rebalanceo.\n"
+                + (f"> Error: `{resultado.error}`\n" if resultado.error else "")
+            )
+
+        enlace_plan = (
+            f"[[{ruta_rebalanceo.stem}]]" if ruta_rebalanceo else "[[08_Rebalanceos_Mensuales]]"
+        )
+
+        cuerpo = f"""# 🧠 Estudio Mensual de la Cartera: {mes}
+{aviso}
+---
+
+Plan del motor de rebalanceo contrastado en este estudio: {enlace_plan}
+
+---
+
+{resultado.texto}
+
+---
+
+## 🔗 Enlaces del Grafo
+
+* MOC: [[08_Rebalanceos_Mensuales]] | Cartera: [[Cartera_Real]] | Estado: [[Estado_Vital]]
+* Contexto del mes: [[05_Diario_Reflexion]], [[04_Sentimiento_Y_Flujos]]
+* Mandato: [[Mandato_Institucional]], [[Reglas_De_Supervivencia]]
+"""
+        atomic_write_text(file_path, self.build_markdown(meta, cuerpo), encoding="utf-8")
+        self._append_to_moc(
+            "08_Rebalanceos_Mensuales",
+            "## 🧠 Estudios Mensuales",
+            f"* 🧠 [[{file_path.stem}]]",
         )
         return file_path
 
@@ -951,7 +1224,17 @@ Verificado de forma determinista contra [[Reglas_De_Supervivencia]]:
         valuation: Optional[PortfolioValuation] = None,
         events: str = "",
         inteligencia_simulada: bool = False,
+        conclusion: str = "",
+        posiciones_a_vigilar: Optional[List[str]] = None,
     ) -> Path:
+        """Control diario de la cartera.
+
+        El frontmatter es lo que releen los niveles superiores (ver
+        `leer_memoria_diario`): `conclusion_ia` para el escaneo semanal y el
+        estudio mensual, `precios_eur` para que el control del día siguiente
+        mida cuánto se ha movido cada posición, y `posiciones_a_vigilar` para
+        que el escaneo semanal investigue primero lo que se movió con fuerza.
+        """
         file_path = self.vault_path / "05_Diario_Reflexion" / f"{date_str}_Cierre_Mercado.md"
 
         meta = {
@@ -964,6 +1247,15 @@ Verificado de forma determinista contra [[Reglas_De_Supervivencia]]:
             "cobertura_datos_pct": round(health.cobertura_datos_pct, 2),
             "inteligencia_simulada": inteligencia_simulada,
             "eventos_clave": events or "Revisión diaria del ciclo de mercado",
+            "conclusion_ia": conclusion.strip(),
+            "posiciones_a_vigilar": list(posiciones_a_vigilar or []),
+            # Sólo precios fiables: una referencia inventada no puede servir
+            # de base para medir el movimiento de mañana.
+            "precios_eur": {
+                p.ticker: round(p.precio_unitario_eur, 6)
+                for p in (valuation.posiciones if valuation else [])
+                if p.fuente_precio.es_fiable
+            },
         }
 
         aviso = ""
@@ -997,7 +1289,7 @@ Verificado de forma determinista contra [[Reglas_De_Supervivencia]]:
 {aviso}
 ---
 
-## 1. Monitor de Mercado, Macro y Geopolítica
+## 1. Control Diario de la Cartera
 
 {summary}
 
@@ -1029,8 +1321,87 @@ stop-loss de emergencia.
 * Mandato: [[Mandato_Institucional]], [[Reglas_De_Supervivencia]]
 * Departamentos: [[01_Departamento_Macro]], [[02_Analisis_Fundamental]], [[03_Mesa_Cuantitativa_Riesgo]], [[04_Sentimiento_Y_Flujos]]
 """
-        file_path.write_text(self.build_markdown(meta, cuerpo), encoding="utf-8")
+        atomic_write_text(file_path, self.build_markdown(meta, cuerpo), encoding="utf-8")
         self._append_to_moc("05_Diario_Reflexion", "## 📋 Entradas del Diario", f"* 📓 [[{file_path.stem}]]")
+        return file_path
+
+    # ------------------------------------------------------------------
+    # Noticias semanales
+    # ------------------------------------------------------------------
+    def write_weekly_news_report(
+        self,
+        fecha_str: str,
+        resultado: NewsScanResult,
+        positions: List[Position],
+    ) -> Path:
+        """Registra el escaneo semanal de noticias de la cartera.
+
+        A diferencia del diario, esta nota no lleva estado vital ni NAV: es
+        un digest de lo que ha pasado esta semana en cada activo, con las
+        fuentes citadas para poder verificarlo. `leer_ultima_fecha_noticias_semanales`
+        vuelve a leer esta misma carpeta para saber cuándo tocó el último
+        escaneo, así que el nombre de archivo (`{{fecha}}_Noticias_Semanales.md`)
+        y el frontmatter `fecha` son la fuente de verdad, no un registro aparte.
+        """
+        file_path = (
+            self.vault_path / "04_Sentimiento_Y_Flujos" / "Noticias_Semanales"
+            / f"{fecha_str}_Noticias_Semanales.md"
+        )
+
+        meta = {
+            "tipo": "noticias_semanales",
+            "fecha": fecha_str,
+            "activos": [p.ticker for p in positions],
+            "modelo": resultado.modelo,
+            "busquedas_realizadas": resultado.busquedas_realizadas,
+            "disponible": resultado.disponible,
+            # Lo que relee el estudio mensual además del resumen por activo.
+            "conclusion_semana": (
+                extraer_conclusion(resultado.texto, CONCLUSION_SEMANA) if resultado.disponible else ""
+            ),
+        }
+
+        aviso = ""
+        if not resultado.disponible:
+            aviso = (
+                "\n> [!WARNING]\n"
+                "> **Escaneo no disponible esta semana.** "
+                f"{resultado.error or 'Sin más detalle.'} Configura "
+                "`ANTHROPIC_API_KEY` en `.env` para que el escaneo se ejecute.\n"
+            )
+
+        fuentes_md = "\n".join(f"- {f}" for f in resultado.fuentes) or "- Sin fuentes citadas."
+        enlaces_activos = " | ".join(
+            self.enlace(p.ticker, p.nota_activo) for p in positions
+        ) or "Sin posiciones."
+
+        cuerpo = f"""# 📰 Noticias Semanales de la Cartera: {fecha_str}
+{aviso}
+---
+
+## 1. Resumen por Activo
+
+{resultado.texto}
+
+---
+
+## 2. Fuentes Citadas
+
+{fuentes_md}
+
+---
+
+## 🔗 Enlaces del Grafo
+
+* MOC: [[04_Sentimiento_Y_Flujos]] | Cartera: [[Cartera_Real]]
+* Activos: {enlaces_activos}
+"""
+        atomic_write_text(file_path, self.build_markdown(meta, cuerpo), encoding="utf-8")
+        self._append_to_moc(
+            "04_Sentimiento_Y_Flujos",
+            "## 📰 Noticias Semanales",
+            f"* 📰 [[{file_path.stem}]]",
+        )
         return file_path
 
     # ------------------------------------------------------------------
@@ -1048,4 +1419,4 @@ stop-loss de emergencia.
             texto = texto.replace(encabezado, f"{encabezado}\n\n{linea}", 1)
         else:
             texto = texto.rstrip() + f"\n\n{encabezado}\n\n{linea}\n"
-        moc_path.write_text(texto, encoding="utf-8")
+        atomic_write_text(moc_path, texto, encoding="utf-8")

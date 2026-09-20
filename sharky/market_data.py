@@ -130,6 +130,16 @@ class MarketDataProvider:
         # defecto de Yahoo para símbolos sin sufijo de mercado.
         return clave, "USD"
 
+    @staticmethod
+    def is_known(ticker: str) -> bool:
+        """True si el ticker está en `INSTRUMENT_REGISTRY`.
+
+        A diferencia de `resolve`, no fabrica una divisa por defecto: lo usa
+        `TradeRecorder` para exigir `--divisa` explícita en vez de asumir USD
+        para un instrumento que nunca se declaró.
+        """
+        return ticker.upper().strip() in INSTRUMENT_REGISTRY
+
     # ------------------------------------------------------------------
     # Cotización individual
     # ------------------------------------------------------------------

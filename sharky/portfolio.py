@@ -16,6 +16,7 @@ import math
 
 import yaml
 
+from sharky.atomic_io import atomic_write_text
 from sharky.config import VAULT_PATH, BASE_CURRENCY
 from sharky.fx import FxProvider
 from sharky.market_data import MarketDataProvider
@@ -148,8 +149,9 @@ class PortfolioStore:
 """
 
         yaml_str = yaml.dump(meta, sort_keys=False, allow_unicode=True, default_flow_style=False).strip()
-        self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
-        self.ledger_path.write_text(f"---\n{yaml_str}\n---\n\n{cuerpo.strip()}\n", encoding="utf-8")
+        atomic_write_text(
+            self.ledger_path, f"---\n{yaml_str}\n---\n\n{cuerpo.strip()}\n", encoding="utf-8"
+        )
         return self.ledger_path
 
 

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="sharky-token" content="%%SHARKY_TOKEN%%">
+  <meta name="color-scheme" content="light dark">
+  <title>Sharky</title>
+  <link rel="icon" href="/static/icono.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/estilos.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <div class="app">
+    <aside class="barra" aria-label="Navegación">
+      <div class="marca">
+        <img src="/static/icono.svg" alt="" width="32" height="32">
+        <div class="marca-texto">
+          <strong>Sharky</strong>
+          <span>Capital Management</span>
+        </div>
+      </div>
+      <nav class="nav" id="nav"></nav>
+      <div class="barra-pie" id="estado-ia"></div>
+    </aside>
+
+    <main class="principal">
+      <header class="cabecera">
+        <div class="cabecera-titulo">
+          <h1 id="titulo">Panel</h1>
+          <p id="subtitulo" class="tenue"></p>
+        </div>
+        <div class="cabecera-acciones" id="cabecera-acciones"></div>
+      </header>
+      <div id="vista" class="vista"></div>
+    </main>
+  </div>
+
+  <section id="trabajo" class="trabajo" hidden aria-live="polite"></section>
+  <dialog id="dialogo" class="dialogo"></dialog>
+  <div id="avisos" class="avisos" aria-live="polite"></div>
+</body>
+</html>

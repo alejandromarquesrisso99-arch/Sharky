@@ -73,7 +73,7 @@ class RiskGovernor:
     def clasificar_estado(drawdown_pct: float) -> VitalState:
         """Traduce un drawdown a estado vital según Reglas_De_Supervivencia §3."""
         dd = _safe(drawdown_pct)
-        if dd > DEATH_DRAWDOWN_PCT:
+        if dd >= DEATH_DRAWDOWN_PCT:
             return VitalState.MUERTE
         if dd >= DRAWDOWN_ALERTA_MAX_PCT:
             # Cubre 8-15% y también la franja 15-20%, que el mandato no nombra
@@ -123,8 +123,16 @@ class RiskGovernor:
         pnl_eur = round(nav - capital_inicial, 2)
         pnl_pct = round((pnl_eur / capital_inicial * 100.0), 2) if capital_inicial > 0 else 0.0
 
+        # Variación del NAV desde el ciclo anterior (no desde el inicio): la
+        # reposición de energía debe reflejar cómo le ha ido al agente HOY, no
+        # si históricamente ha ganado dinero (ver RISK-1).
+        nav_previo = _safe(previous.nav_actual_eur)
+        variacion_nav_pct = (
+            round((nav - nav_previo) / nav_previo * 100.0, 2) if nav_previo > 0 else 0.0
+        )
+
         energia = (
-            self._calcular_energia(previous, pnl_pct, dias_transcurridos)
+            self._calcular_energia(previous, variacion_nav_pct, dias_transcurridos)
             if actualizar_energia
             else _safe(previous.energia_actual, 100.0)
         )
@@ -151,16 +159,22 @@ class RiskGovernor:
         )
 
     @staticmethod
-    def _calcular_energia(previous: HealthStatus, pnl_pct: float, dias: float) -> float:
+    def _calcular_energia(previous: HealthStatus, variacion_nav_pct: float, dias: float) -> float:
         """Energía metabólica: se consume con el tiempo, se repone con retorno.
 
         El desgaste es proporcional a los **días** transcurridos, no al número de
         veces que se invoca la CLI: si no, ejecutar `daily` diez veces en una hora
         agotaría al agente sin que pasara nada en el mercado.
+
+        La reposición usa `variacion_nav_pct` -- el cambio del NAV desde el
+        **ciclo anterior**, no el PnL acumulado desde el inicio. Con el PnL
+        acumulado, un +30% ya conseguido hace meses reponía energía todos los
+        días aunque la cartera estuviera plana, y la métrica dejaba de decir
+        nada sobre cómo va HOY (ver RISK-1).
         """
         dias_efectivos = max(0.0, min(_safe(dias, 1.0), 30.0))
         desgaste = 2.0 * dias_efectivos
-        reposicion = _safe(pnl_pct) * 1.5
+        reposicion = _safe(variacion_nav_pct) * 1.5
         return max(0.0, min(100.0, _safe(previous.energia_actual, 100.0) - desgaste + reposicion))
 
     # ------------------------------------------------------------------

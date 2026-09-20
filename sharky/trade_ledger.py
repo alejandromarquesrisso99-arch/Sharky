@@ -16,12 +16,12 @@ import uuid
 
 from pydantic import BaseModel
 
-from sharky.config import EXECUTION_MODE
+from sharky import level_watch
+from sharky.file_lock import exclusive_lock
 from sharky.fx import FxProvider
 from sharky.market_data import MarketDataProvider
 from sharky.models import (
     AssetClass,
-    ExecutionMode,
     OrderStatus,
     OrderType,
     Position,
@@ -55,7 +55,9 @@ class TradeRecorder:
         market: Optional[MarketDataProvider] = None,
     ):
         self.store = store or PortfolioStore()
-        self.market = market or MarketDataProvider()
+        # Sin precios de referencia: el libro de posiciones real no se valora
+        # con cotizaciones inventadas cuando el mercado falla (ver DATOS-1).
+        self.market = market or MarketDataProvider(allow_reference_prices=False)
         self.fx = fx or FxProvider()
         self.valuator = valuator or PortfolioValuator(market=self.market, fx=self.fx)
         self.governor = governor or RiskGovernor()
@@ -68,6 +70,7 @@ class TradeRecorder:
         unidades: float,
         precio: float,
         divisa: Optional[str] = None,
+        divisa_niveles: Optional[str] = None,
         comision_eur: float = 0.0,
         stop_loss: float = 0.0,
         target_precio: float = 0.0,
@@ -78,7 +81,6 @@ class TradeRecorder:
         ticker_cotizacion: Optional[str] = None,
         clase: AssetClass = AssetClass.ACCION,
         sector: str = "",
-        modo: Optional[ExecutionMode] = None,
         forzar: bool = False,
     ) -> TradeResult:
         """Valida y, si procede, asienta una operación en el libro.
@@ -97,135 +99,166 @@ class TradeRecorder:
         aquí, así que cuando `validate_order` rechaza en este punto, el
         motivo es siempre de mandato, nunca de dato imposible.
         """
-        portfolio = self.store.load()
-        valuation = self.valuator.value(portfolio)
-        health_previa = self.vault.read_health_status()
-        # Estado vital recalculado con el NAV de ahora, sin gastar energía.
-        health = self.governor.calculate_health(
-            health_previa, valuation, dias_transcurridos=0.0, actualizar_energia=False
-        )
+        # El lock protege el libro de posiciones frente a otro proceso
+        # escribiendo a la vez (servicio 24/7 + `trade` manual, ver INFRA-4).
+        with exclusive_lock(self.store.ledger_path):
+            portfolio = self.store.load()
+            valuation = self.valuator.value(portfolio)
+            health_previa = self.vault.read_health_status()
+            # Estado vital recalculado con el NAV de ahora, sin gastar energía.
+            health = self.governor.calculate_health(
+                health_previa, valuation, dias_transcurridos=0.0, actualizar_energia=False
+            )
 
-        existente = portfolio.get(ticker)
-        if unidades <= 0:
-            return TradeResult(aprobada=False, motivo="RECHAZADA: las unidades deben ser positivas.")
-        if precio <= 0:
-            return TradeResult(aprobada=False, motivo="RECHAZADA: el precio debe ser positivo.")
+            existente = portfolio.get(ticker)
+            if unidades <= 0:
+                return TradeResult(aprobada=False, motivo="RECHAZADA: las unidades deben ser positivas.")
+            if precio <= 0:
+                return TradeResult(aprobada=False, motivo="RECHAZADA: el precio debe ser positivo.")
 
-        # Divisa: la de la posición existente manda; si no, la indicada o la del registro.
-        if divisa:
-            divisa_op = divisa
-        elif existente:
-            divisa_op = existente.divisa_cotizacion
-        else:
-            divisa_op = self.market.resolve(ticker)[1]
-
-        try:
-            fx = self.fx.get_rate(divisa_op)
-        except ValueError as exc:
-            return TradeResult(aprobada=False, motivo=f"RECHAZADA: {exc}")
-
-        precio_eur = precio * fx.tasa
-        bruto_eur = round(unidades * precio_eur, 2)
-        sector_efectivo = sector or (existente.sector if existente else "")
-
-        if tipo_orden == OrderType.VENTA:
-            if existente is None:
-                return TradeResult(
-                    aprobada=False,
-                    motivo=f"RECHAZADA: no hay posición abierta en {ticker}.",
-                )
-            if unidades > existente.unidades + TOLERANCIA_UNIDADES:
+            # Divisa: la de la posición existente manda; si no, la indicada, o el
+            # registro sólo si conoce el ticker -- nunca se asume USD para un
+            # instrumento que nunca se declaró (ver FX-1).
+            if divisa:
+                divisa_op = divisa
+            elif existente:
+                divisa_op = existente.divisa_cotizacion
+            elif self.market.is_known(ticker):
+                divisa_op = self.market.resolve(ticker)[1]
+            else:
                 return TradeResult(
                     aprobada=False,
                     motivo=(
-                        f"RECHAZADA: intentas vender {unidades:,.6f} títulos de {ticker} "
-                        f"pero sólo posees {existente.unidades:,.6f}."
+                        f"RECHAZADA: {ticker} no está en el registro de instrumentos y no "
+                        "hay posición previa que fije su divisa. Indica --divisa explícita."
                     ),
                 )
 
-        orden = TradeOrder(
-            id_operacion=f"OP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:4].upper()}",
-            modo=modo or (ExecutionMode.REAL if EXECUTION_MODE == "REAL" else ExecutionMode.PAPER_TRADING),
-            ticker=existente.ticker if existente else ticker,
-            tipo_orden=tipo_orden,
-            cantidad_acciones=unidades,
-            precio_ejecutado=precio,
-            divisa_ejecucion=divisa_op,
-            tipo_cambio_a_eur=round(fx.tasa, 8),
-            total_invertido_eur=bruto_eur,
-            comision_eur=round(comision_eur, 2),
-            stop_loss=stop_loss,
-            target_precio=target_precio,
-            estado=OrderStatus.ABIERTA,
-            tesis_referencia=tesis_referencia,
-            justificacion=justificacion,
-        )
+            try:
+                fx = self.fx.get_rate(divisa_op)
+            except ValueError as exc:
+                return TradeResult(aprobada=False, motivo=f"RECHAZADA: {exc}")
 
-        aprobada, motivo = self.governor.validate_order(
-            orden, health, valuation=valuation, sector=sector_efectivo
-        )
-        if not aprobada:
-            if not forzar:
-                return TradeResult(aprobada=False, motivo=motivo, orden=orden)
-            motivo = (
-                "⚠️ MANDATO INCUMPLIDO -- registrada por decisión explícita del "
-                f"usuario (--forzar). Aviso del RiskGovernor: {motivo}"
-            )
+            precio_eur = precio * fx.tasa
+            bruto_eur = round(unidades * precio_eur, 2)
+            sector_efectivo = sector or (existente.sector if existente else "")
 
-        # ---------------- Asiento contable ----------------
-        pnl_realizado: Optional[float] = None
+            # Stop y target deben vivir en la divisa de ejecución: es contra lo
+            # que `validate_order` compara `precio_ejecutado` directamente. Si la
+            # tesis los declaró en otra divisa, se convierten cruzando por EUR
+            # antes de construir la orden (ver FX-2).
+            stop_loss_op = stop_loss
+            target_precio_op = target_precio
+            if divisa_niveles and divisa_niveles.upper() != divisa_op.upper():
+                try:
+                    fx_niveles = self.fx.get_rate(divisa_niveles)
+                except ValueError as exc:
+                    return TradeResult(aprobada=False, motivo=f"RECHAZADA: {exc}")
+                if fx.tasa > 0:
+                    factor = fx_niveles.tasa / fx.tasa
+                    if stop_loss > 0:
+                        stop_loss_op = round(stop_loss * factor, 6)
+                    if target_precio > 0:
+                        target_precio_op = round(target_precio * factor, 6)
 
-        if tipo_orden == OrderType.COMPRA:
-            if existente is None:
-                portfolio.posiciones.append(
-                    Position(
-                        ticker=ticker,
-                        nombre=nombre or ticker,
-                        isin=isin,
-                        ticker_cotizacion=ticker_cotizacion or self.market.resolve(ticker)[0],
-                        divisa_cotizacion=divisa_op,
-                        clase=clase,
-                        unidades=unidades,
-                        # La comisión se capitaliza en el coste de adquisición.
-                        coste_unitario_eur=round((bruto_eur + orden.comision_eur) / unidades, 6),
-                        sector=sector_efectivo,
-                        nota_activo=f"[[{ticker}]]",
+            if tipo_orden == OrderType.VENTA:
+                if existente is None:
+                    return TradeResult(
+                        aprobada=False,
+                        motivo=f"RECHAZADA: no hay posición abierta en {ticker}.",
                     )
-                )
-            else:
-                coste_anterior = existente.unidades * existente.coste_unitario_eur
-                unidades_nuevas = existente.unidades + unidades
-                existente.coste_unitario_eur = round(
-                    (coste_anterior + bruto_eur + orden.comision_eur) / unidades_nuevas, 6
-                )
-                existente.unidades = unidades_nuevas
-            portfolio.efectivo_eur = round(
-                portfolio.efectivo_eur - bruto_eur - orden.comision_eur, 2
-            )
-        else:  # VENTA
-            # Invariante ya garantizado más arriba: una VENTA sin `existente` se
-            # rechaza antes de llegar aquí (ver el bloque `if existente is None`
-            # de la validación). El assert lo deja explícito para el lector y
-            # para el analizador de tipos, en vez de confiar en el orden del
-            # código para descartar el `Optional`.
-            assert existente is not None  # nosec B101 -- invariante interno, no control de acceso
-            coste_liberado = round(unidades * existente.coste_unitario_eur, 2)
-            pnl_realizado = round(bruto_eur - coste_liberado - orden.comision_eur, 2)
-            restantes = existente.unidades - unidades
-            if restantes <= TOLERANCIA_UNIDADES:
-                portfolio.posiciones = [
-                    p for p in portfolio.posiciones if p.ticker != existente.ticker
-                ]
-                orden.estado = OrderStatus.CERRADA
-            else:
-                existente.unidades = restantes
-            portfolio.efectivo_eur = round(
-                portfolio.efectivo_eur + bruto_eur - orden.comision_eur, 2
+                if unidades > existente.unidades + TOLERANCIA_UNIDADES:
+                    return TradeResult(
+                        aprobada=False,
+                        motivo=(
+                            f"RECHAZADA: intentas vender {unidades:,.6f} títulos de {ticker} "
+                            f"pero sólo posees {existente.unidades:,.6f}."
+                        ),
+                    )
+
+            orden = TradeOrder(
+                id_operacion=f"OP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:4].upper()}",
+                ticker=existente.ticker if existente else ticker,
+                tipo_orden=tipo_orden,
+                cantidad_acciones=unidades,
+                precio_ejecutado=precio,
+                divisa_ejecucion=divisa_op,
+                tipo_cambio_a_eur=round(fx.tasa, 8),
+                total_invertido_eur=bruto_eur,
+                comision_eur=round(comision_eur, 2),
+                stop_loss=stop_loss_op,
+                target_precio=target_precio_op,
+                estado=OrderStatus.ABIERTA,
+                tesis_referencia=tesis_referencia,
+                justificacion=justificacion,
             )
 
-        self.store.save(portfolio)
+            aprobada, motivo = self.governor.validate_order(
+                orden, health, valuation=valuation, sector=sector_efectivo
+            )
+            if not aprobada:
+                if not forzar:
+                    return TradeResult(aprobada=False, motivo=motivo, orden=orden)
+                motivo = (
+                    "⚠️ MANDATO INCUMPLIDO -- registrada por decisión explícita del "
+                    f"usuario (--forzar). Aviso del RiskGovernor: {motivo}"
+                )
+
+            # ---------------- Asiento contable ----------------
+            pnl_realizado: Optional[float] = None
+
+            if tipo_orden == OrderType.COMPRA:
+                if existente is None:
+                    portfolio.posiciones.append(
+                        Position(
+                            ticker=ticker,
+                            nombre=nombre or ticker,
+                            isin=isin,
+                            ticker_cotizacion=ticker_cotizacion or self.market.resolve(ticker)[0],
+                            divisa_cotizacion=divisa_op,
+                            clase=clase,
+                            unidades=unidades,
+                            # La comisión se capitaliza en el coste de adquisición.
+                            coste_unitario_eur=round((bruto_eur + orden.comision_eur) / unidades, 6),
+                            sector=sector_efectivo,
+                            nota_activo=f"[[{ticker}]]",
+                        )
+                    )
+                else:
+                    coste_anterior = existente.unidades * existente.coste_unitario_eur
+                    unidades_nuevas = existente.unidades + unidades
+                    existente.coste_unitario_eur = round(
+                        (coste_anterior + bruto_eur + orden.comision_eur) / unidades_nuevas, 6
+                    )
+                    existente.unidades = unidades_nuevas
+                portfolio.efectivo_eur = round(
+                    portfolio.efectivo_eur - bruto_eur - orden.comision_eur, 2
+                )
+            else:  # VENTA
+                # Invariante ya garantizado más arriba: una VENTA sin `existente` se
+                # rechaza antes de llegar aquí (ver el bloque `if existente is None`
+                # de la validación). El assert lo deja explícito para el lector y
+                # para el analizador de tipos, en vez de confiar en el orden del
+                # código para descartar el `Optional`.
+                assert existente is not None  # nosec B101 -- invariante interno, no control de acceso
+                coste_liberado = round(unidades * existente.coste_unitario_eur, 2)
+                pnl_realizado = round(bruto_eur - coste_liberado - orden.comision_eur, 2)
+                restantes = existente.unidades - unidades
+                if restantes <= TOLERANCIA_UNIDADES:
+                    portfolio.posiciones = [
+                        p for p in portfolio.posiciones if p.ticker != existente.ticker
+                    ]
+                    orden.estado = OrderStatus.CERRADA
+                else:
+                    existente.unidades = restantes
+                portfolio.efectivo_eur = round(
+                    portfolio.efectivo_eur + bruto_eur - orden.comision_eur, 2
+                )
+
+            self.store.save(portfolio)
 
         # ---------------- Estado vital tras la operación ----------------
+        # Fuera del lock: sólo protege el libro de posiciones (ver INFRA-4).
         nueva_valoracion = self.valuator.value(portfolio)
         if pnl_realizado is not None:
             if pnl_realizado > 0:
@@ -237,18 +270,44 @@ class TradeRecorder:
             health_previa, nueva_valoracion, dias_transcurridos=0.0, actualizar_energia=False
         )
         incumplimientos = self.governor.audit_portfolio(nueva_valoracion, health_posterior)
-        self.vault.update_health_status(
-            health_posterior, valuation=nueva_valoracion, incumplimientos=incumplimientos
-        )
 
-        nota = self.vault.write_trade_note(orden, motivo, pnl_realizado_eur=pnl_realizado)
+        # El asiento ya es real y está guardado: un fallo de aquí en adelante no
+        # debe deshacerlo (no se puede "revertir" una compra/venta que ya
+        # ocurrió en el broker), sólo avisar de qué escritura posterior falló en
+        # vez de dejarlo desincronizado en silencio (ver INFRA-3).
+        avisos_post_asiento = ""
+        try:
+            # Recarga los niveles que el ciclo diario ya dejó hoy en disco: sin
+            # esto, registrar esta operación borraría del cuadro de mandos el
+            # aviso de un stop u otro nivel alcanzado esta misma jornada (ver
+            # CICLO-1).
+            niveles_hoy = level_watch.cargar()
+            self.vault.update_health_status(
+                health_posterior,
+                valuation=nueva_valoracion,
+                incumplimientos=incumplimientos,
+                alertas_niveles=niveles_hoy,
+            )
+        except Exception as exc:
+            avisos_post_asiento += (
+                f"\n\n⚠️ La operación quedó asentada en el libro, pero no se pudo "
+                f"actualizar Estado_Vital.md: {exc}"
+            )
+
+        nota = None
+        try:
+            nota = self.vault.write_trade_note(
+                orden, motivo + avisos_post_asiento, pnl_realizado_eur=pnl_realizado
+            )
+        except Exception as exc:
+            avisos_post_asiento += f"\n\n⚠️ Tampoco se pudo escribir la nota de la operación: {exc}"
 
         return TradeResult(
             aprobada=True,
-            motivo=motivo,
+            motivo=motivo + avisos_post_asiento,
             orden=orden,
             pnl_realizado_eur=pnl_realizado,
-            nota_operacion=str(nota),
+            nota_operacion=str(nota) if nota else None,
             nav_posterior_eur=nueva_valoracion.nav_eur,
             efectivo_posterior_eur=nueva_valoracion.efectivo_eur,
         )
