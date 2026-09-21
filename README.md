@@ -155,6 +155,10 @@ MOC, bajo «Altas Automáticas») en vez de dejar el enlace roto.
 ## 5. Comandos
 
 ```bash
+# Configuración inicial: clave de Claude y posiciones desde un CSV. Se abre
+# sola la primera vez que lanzas cualquier comando (ver §6, «Primeros pasos»)
+python -m sharky.cli init
+
 # Estado vital, NAV e incumplimientos del mandato
 python -m sharky.cli status
 
@@ -336,8 +340,58 @@ python -m venv .venv
 pip install -r requirements.txt
 pip install -e .
 
-cp .env.example .env          # y añade tu ANTHROPIC_API_KEY
+python -m sharky.cli init     # clave de Claude y posiciones (ver «Primeros pasos»)
 ```
+
+### Primeros pasos
+
+La bóveda y el `.env` no están en el repositorio: cada persona empieza con
+los suyos. Al lanzar cualquier comando, o la app, sin libro de posiciones,
+Sharky abre un asistente (también se abre a mano con `python -m sharky.cli
+init`) que pide tres cosas y no escribe nada hasta que confirmas el resumen:
+
+1. **La clave de la API de Claude** ([console.anthropic.com](https://console.anthropic.com)).
+   No se muestra al escribirla y se guarda en `.env`, que es el archivo de
+   configuración de usuario (el resto de ajustes están explicados en
+   `.env.example`). Si la dejas vacía, Sharky funciona en modo simulado.
+2. **Tus posiciones, en un CSV** con estas columnas y en este orden:
+
+   | # | Columna | | Qué va |
+   | ---: | :--- | :--- | :--- |
+   | 1 | `ticker` | obligatoria | Nombre corto de la posición; da nombre a su ficha (`MSFT`) |
+   | 2 | `nombre` | obligatoria | Empresa o fondo |
+   | 3 | `isin` | opcional | Con él, `resolve-isin` busca el símbolo de cotización |
+   | 4 | `unidades` | obligatoria | Títulos, con decimales si los hay |
+   | 5 | `coste_medio_eur` | obligatoria | Precio medio de compra por título, en euros |
+   | 6 | `divisa` | obligatoria | Divisa en la que cotiza: `EUR`, `USD`, `GBp`, `HKD`... |
+   | 7 | `sector` | opcional | Para el límite de concentración sectorial |
+   | 8 | `simbolo` | opcional | Símbolo de Yahoo Finance (`RHM.DE`); vacío = registro de Sharky |
+   | 9 | `clase` | opcional | `ACCION` (por defecto), `ETF`, `ETC` o `CRIPTO` |
+
+   ```
+   ticker;nombre;isin;unidades;coste_medio_eur;divisa;sector;simbolo;clase
+   SAN;Banco Santander;ES0113900J37;200;4,50;EUR;Banca;SAN.MC;ACCION
+   ```
+
+   Separa las columnas con `;` y usa coma o punto como decimal; la cabecera
+   es opcional. Si pulsas Enter en vez de dar una ruta, el asistente crea una
+   plantilla para rellenar. El extracto del bróker se puede convertir a este
+   formato con Claude. Si el CSV tiene errores, los enumera todos con su
+   línea y vuelve a pedirlo. `.gitignore` excluye los CSV: no se suben al
+   repositorio.
+3. **El efectivo** en la cuenta y el **bróker**.
+
+Con eso crea el libro de posiciones, una ficha por posición y las notas
+índice de la bóveda, y repite el comando que habías lanzado. Después:
+
+* **Escribe una tesis con su stop-loss para cada posición** en
+  `vault/01_Tesis_Activas` (plantilla en `vault/07_Plantillas`). Sin tesis,
+  Sharky no vigila ningún stop.
+* Si alguna posición quedó sin símbolo de cotización, se valora a coste
+  hasta que lo añadas; `python -m sharky.cli resolve-isin` sugiere uno.
+
+La tarea programada de Windows no pregunta nunca: sin configurar, deja el
+aviso en su log y termina. Nunca sobrescribe un libro que ya existe.
 
 ### Tests, lint y tipos
 

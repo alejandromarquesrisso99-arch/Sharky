@@ -46,7 +46,7 @@ class PortfolioStore:
         if not self.ledger_path.exists():
             raise FileNotFoundError(
                 f"No existe el libro de posiciones en {self.ledger_path}. "
-                f"Créalo o ejecuta `sharky portfolio --init`."
+                f"Ejecuta `python -m sharky.cli init` para crearlo."
             )
 
         contenido = self.ledger_path.read_text(encoding="utf-8")

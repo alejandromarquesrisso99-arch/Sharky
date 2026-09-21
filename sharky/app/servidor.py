@@ -44,6 +44,7 @@ enable_utf8()
 from sharky.app import datos  # noqa: E402
 from sharky.app.trabajos import ACCIONES, GestorTrabajos, OcupadoError, Trabajo  # noqa: E402
 from sharky.models import AssetClass, OrderType  # noqa: E402
+from sharky import primer_arranque  # noqa: E402
 
 PUERTO_DEFECTO = int(os.getenv("SHARKY_APP_PORT", "8765"))
 HOST_DEFECTO = "127.0.0.1"
@@ -407,7 +408,25 @@ def crear_servidor(app: EstadoApp, host: str = HOST_DEFECTO, puerto: int = PUERT
     return servidor
 
 
+def _primer_arranque(argv: list) -> int:
+    """Sin libro de posiciones la app no tiene nada que mostrar: se configura
+    Sharky primero."""
+    if primer_arranque.es_interactivo():
+        # `python -m sharky.app` desde una terminal: se pregunta ahí mismo.
+        if not primer_arranque.asistente():
+            return 1
+        return primer_arranque.relanzar("sharky.app", argv)
+    # Acceso directo (pythonw): no hay consola donde preguntar, se abre una.
+    if primer_arranque.abrir_asistente_en_consola():
+        return 0
+    print("[Sharky] Todavía no está configurado: ejecuta `python -m sharky.cli init`.")
+    return 2
+
+
 def main(argv: Optional[list] = None) -> int:
+    if primer_arranque.falta_configurar():
+        return _primer_arranque(list(sys.argv[1:] if argv is None else argv))
+
     parser = argparse.ArgumentParser(prog="sharky app", description="App de gestión de Sharky")
     parser.add_argument("--puerto", type=int, default=PUERTO_DEFECTO)
     parser.add_argument("--no-abrir", action="store_true", help="No abrir la ventana de la app")

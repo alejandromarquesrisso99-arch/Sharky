@@ -13,9 +13,12 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 
-# Variables de entorno, secretos y extractos financieros personales
+# Variables de entorno, secretos y extractos financieros personales. Los CSV
+# son el formato de importación de posiciones (`sharky init`): llevan la
+# cartera de quien lo usa.
 .env
 *.pdf
+*.csv
 
 # Distribución / Build
 dist/

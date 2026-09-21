@@ -26,6 +26,7 @@ from sharky.config import (  # noqa: E402
     has_live_api_key,
 )
 from sharky.models import AssetClass, OrderType  # noqa: E402
+from sharky import primer_arranque  # noqa: E402
 from sharky.portfolio import PortfolioStore  # noqa: E402
 from sharky.scheduler import SharkyScheduler  # noqa: E402
 from sharky.trade_ledger import TradeRecorder  # noqa: E402
@@ -752,12 +753,57 @@ def build_parser() -> argparse.ArgumentParser:
     p_app.add_argument("--puerto", type=int, default=None, help="Puerto local (defecto: 8765)")
     p_app.add_argument("--no-abrir", action="store_true", help="Sólo el servidor, sin abrir ventana")
 
+    p_init = sub.add_parser(
+        "init", help="Configuración inicial: clave de Claude y posiciones desde un CSV"
+    )
+    p_init.add_argument(
+        "--abrir-app", action="store_true",
+        help="Abre la app al terminar (lo usa el acceso directo de la app)",
+    )
+
     return parser
+
+
+def cmd_init(args) -> int:
+    listo = primer_arranque.asistente()
+    if args.abrir_app:
+        # Consola abierta sólo para el asistente desde el acceso directo de la
+        # app: sin esta pausa se cerraría antes de poder leer el resultado.
+        if listo:
+            primer_arranque.abrir_app()
+        try:
+            input("\nPulsa Enter para cerrar esta ventana...")
+        except (EOFError, KeyboardInterrupt):
+            pass
+    return 0 if listo else 1
+
+
+def _configurar_y_repetir(argumentos: list) -> int:
+    """Primer arranque desde cualquier comando: asistente y, si termina bien,
+    la orden original en un proceso nuevo (que ya lee el `.env` recién escrito)."""
+    if not primer_arranque.es_interactivo():
+        # La tarea programada no tiene a nadie delante: esperar una respuesta
+        # la dejaría colgada. Queda el aviso en su log.
+        print(
+            "❌ Sharky todavía no está configurado: no hay libro de posiciones en "
+            f"{PortfolioStore().ledger_path}.\n"
+            "   Abre una terminal en la carpeta de Sharky y ejecuta: python -m sharky.cli init"
+        )
+        return 2
+    if not primer_arranque.asistente():
+        return 1
+    print("\n▶️  Sigo con lo que habías pedido...\n")
+    return primer_arranque.relanzar("sharky.cli", argumentos)
 
 
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+
+    if args.command == "init":
+        return cmd_init(args)
+    if primer_arranque.falta_configurar():
+        return _configurar_y_repetir(sys.argv[1:])
 
     if args.command in ("service", "daemon"):
         cmd_service(getattr(args, "interval", 60))
