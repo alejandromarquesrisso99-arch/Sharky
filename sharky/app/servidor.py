@@ -170,6 +170,19 @@ class EstadoApp:
             "nota": (
                 Path(resultado.nota_operacion).name if resultado.nota_operacion else None
             ),
+            # Consecuencias sobre el ciclo de vida de la convicción: la app las
+            # enseña para que registrar una venta no parezca dejar viva una
+            # tesis que ya no tiene posición detrás.
+            "tesis_abierta": (
+                Path(resultado.tesis_abierta).name if resultado.tesis_abierta else None
+            ),
+            "tesis_cerrada": (
+                Path(resultado.tesis_cerrada).name if resultado.tesis_cerrada else None
+            ),
+            "alerta_actualizada": (
+                Path(resultado.alerta_actualizada).name
+                if resultado.alerta_actualizada else None
+            ),
         }
 
 

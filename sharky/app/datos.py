@@ -17,6 +17,16 @@ from markdown_it import MarkdownIt
 from sharky import level_watch
 from sharky.config import (
     CLAUDE_MODEL,
+    EXPLORER_EFFORT,
+    EXPLORER_MAX_BUSQUEDAS,
+    EXPLORER_MAX_CANDIDATOS,
+    EXPLORER_MAX_TOKENS,
+    EXPLORER_MODEL,
+    REVIEW_EFFORT,
+    REVIEW_MAX_TESIS,
+    REVIEW_MAX_TOKENS,
+    REVIEW_MESES_MAX,
+    REVIEW_MODEL,
     DEATH_DRAWDOWN_PCT,
     DRAWDOWN_ALERTA_MAX_PCT,
     DRAWDOWN_OPTIMO_MAX_PCT,
@@ -49,6 +59,10 @@ TIPOS_INFORME: Dict[str, tuple] = {
     "operaciones": ("04_Operaciones_Bitacora", "*.md", "Operaciones"),
     "tesis": ("01_Tesis_Activas", "*.md", "Tesis activas"),
     "alertas": ("09_Alertas_Oportunidades", "*.md", "Alertas de oportunidad"),
+    "exploraciones": (
+        "09_Alertas_Oportunidades/Exploraciones", "*_Exploracion_Mercado.md",
+        "Exploraciones de mercado",
+    ),
 }
 
 _MD = MarkdownIt("commonmark", {"html": False, "typographer": False}).enable(["table", "strikethrough"])
@@ -117,6 +131,12 @@ def _etiquetas(tipo: str, meta: Dict[str, Any]) -> List[Dict[str, str]]:
         chip(meta.get("ticker"))
         if meta.get("total_eur") is not None:
             chip(f"{float(meta['total_eur']):,.2f} €".replace(",", "X").replace(".", ",").replace("X", "."))
+    elif tipo == "exploraciones":
+        if meta.get("disponible") is False:
+            chip("No disponible", "aviso")
+        chip(f"{meta.get('candidatos_propuestos', 0)} candidato(s)")
+        emitidas = int(meta.get("alertas_emitidas") or 0)
+        chip(f"{emitidas} alerta(s)", "positivo" if emitidas else "neutro")
     elif tipo in ("tesis", "alertas"):
         chip(meta.get("ticker"))
         chip(meta.get("estado"))
@@ -322,6 +342,10 @@ def construir_panel(agent) -> Dict[str, Any]:
         for a in agent.get_active_alerts()
     ]
 
+    exploracion = vault.leer_ultima_exploracion()
+    if exploracion:
+        exploracion = {**exploracion, "fecha": exploracion["fecha"].isoformat()}
+
     return {
         "generado": datetime.now().isoformat(timespec="seconds"),
         "salud": {
@@ -376,6 +400,11 @@ def construir_panel(agent) -> Dict[str, Any]:
         ],
         "niveles": alertas_niveles,
         "oportunidades": alertas_oportunidad,
+        # El radar tiene dos mitades: lo que está vivo ahora (`oportunidades`)
+        # y cuándo se salió por última vez a buscar más (`exploracion`). Sin
+        # la segunda, una lista vacía de alertas no distingue "no hay nada"
+        # de "nunca se ha buscado".
+        "exploracion": exploracion,
         "historial": historial,
         "cadencia": {
             "diario": {
@@ -408,6 +437,8 @@ def info_sistema(vault_path: Path) -> Dict[str, Any]:
     return {
         "modelo": CLAUDE_MODEL,
         "modelo_noticias": NEWS_MODEL,
+        "modelo_explorador": EXPLORER_MODEL,
+        "modelo_revision": REVIEW_MODEL,
         "api_conectada": has_live_api_key(),
         "boveda": str(vault_path),
         "perfiles": [
@@ -419,5 +450,17 @@ def info_sistema(vault_path: Path) -> Dict[str, Any]:
              "que": "Estudio completo y reevaluación de posiciones"},
             {"nivel": "Comité", "effort": EFFORT_MENSUAL or "—", "max_tokens": MAX_TOKENS_COMITE,
              "que": "Resolución del CIO a demanda"},
+            {"nivel": "Revisión de tesis", "effort": REVIEW_EFFORT or "—",
+             "max_tokens": REVIEW_MAX_TOKENS,
+             "que": (
+                 f"Tesis con novedades del mes, hasta {REVIEW_MAX_TESIS}; "
+                 f"ninguna pasa más de {REVIEW_MESES_MAX} meses sin revisar"
+             )},
+            {"nivel": "Explorador", "effort": EXPLORER_EFFORT or "—",
+             "max_tokens": EXPLORER_MAX_TOKENS,
+             "que": (
+                 f"Oportunidades nuevas en la web: hasta {EXPLORER_MAX_BUSQUEDAS} "
+                 f"búsquedas y {EXPLORER_MAX_CANDIDATOS} candidatos"
+             )},
         ],
     }

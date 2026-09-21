@@ -23,7 +23,10 @@ def test_obsidian_graph_integrity():
         content = f.read_text(encoding="utf-8")
         links = link_pattern.findall(content)
         for link in links:
-            l_clean = link.strip()
+            # Dentro de una tabla el alias va escapado (`[[Nota\\|Alias]]`) para
+            # que el `|` no parta la celda. Esa barra invertida la come el
+            # renderizador, no es parte del nombre de la nota de destino.
+            l_clean = link.strip().rstrip("\\").strip()
             # Ignore template variables like {{TICKER}}
             if not l_clean or "{{" in l_clean:
                 continue

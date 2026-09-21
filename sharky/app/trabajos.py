@@ -56,14 +56,30 @@ ACCIONES: Dict[str, Accion] = {
         ),
         Accion(
             "estudio", "Estudio mensual",
-            "Plan de rebalanceo del Día 1 y reevaluación de cada posición con "
-            "todo el contexto del mes.",
-            True, "≈ 0,50–1 $", lambda agent: agent.run_monthly_study(),
+            "Plan de rebalanceo del Día 1, reevaluación de cada posición con "
+            "todo el contexto del mes y revisión de las tesis con novedades.",
+            True, "≈ 0,80–1,80 $", lambda agent: agent.run_monthly_study(),
         ),
         Accion(
             "rebalanceo", "Plan de rebalanceo",
             "Sólo el plan determinista del motor de rebalanceo, sin Claude.",
             False, "Gratis", lambda agent: agent.generate_monthly_rebalance(),
+        ),
+        Accion(
+            "revisar", "Revisar tesis",
+            "Relee las tesis activas con novedades del mes (movimiento, niveles, "
+            "incumplimientos o noticias) y apila una revisión fechada sobre cada "
+            "una. No reescribe lo anterior ni toca un solo nivel: un cambio de "
+            "stop se propone y lo aplicas tú.",
+            True, "≈ 0,30–0,80 $", lambda agent: agent.run_thesis_review(),
+        ),
+        Accion(
+            "explorar", "Explorar el mercado",
+            "Busca en la web oportunidades asimétricas NUEVAS, fuera de la "
+            "cartera y del universo de vigilancia, con el modelo más capaz de "
+            "Claude. Cada candidato pasa después por el filtro cuantitativo de "
+            "siempre: sólo los que lo superan se convierten en alerta.",
+            True, "≈ 1–2,50 $", lambda agent: agent.run_market_exploration(),
         ),
         Accion(
             "comite", "Comité de inversión",

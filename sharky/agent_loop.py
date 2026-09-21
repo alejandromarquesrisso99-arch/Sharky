@@ -11,6 +11,11 @@ anterior (ver `claude_client.py`):
   * `run_daily_cycle`       -> control de posiciones y normas.
   * `run_weekly_news_scan`  -> noticias + contexto de los últimos 7 días.
   * `run_monthly_study`     -> estudio completo + reevaluación de posiciones.
+
+Fuera de esa cadencia y sólo a demanda, `run_market_exploration` sale a buscar
+candidatos nuevos en la web con el modelo más capaz disponible. Es el único
+ciclo que puede ampliar el universo vigilado; el resto trabaja sobre lo que ya
+está declarado.
 """
 
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -22,7 +27,9 @@ from sharky.firm_committee import InvestmentCommittee
 from sharky.fx import FxProvider
 from sharky import level_watch
 from sharky.market_data import CORE_WATCHLIST, MarketDataProvider
+from sharky.market_explorer import MarketExplorer
 from sharky.models import (
+    AlertStatus,
     HealthStatus,
     LevelAlert,
     LevelKind,
@@ -31,9 +38,15 @@ from sharky.models import (
     RiskBreach,
 )
 from sharky.news_scanner import NewsScanner
-from sharky.opportunity_detector import OpportunityDetector
+from sharky.opportunity_detector import (
+    UNIVERSO_CONVICCION,
+    OpportunityDetector,
+    alertas_caducadas,
+)
 from sharky.portfolio import PortfolioStore, PortfolioValuator
 from sharky.rebalance_engine import MonthlyRebalanceEngine
+from sharky import thesis_review
+from sharky.thesis_review import ThesisReviewer
 from sharky.risk_governor import RiskGovernor
 from sharky.vault_manager import VaultManager
 
@@ -55,6 +68,8 @@ class SharkyAgent:
         self.rebalancer = MonthlyRebalanceEngine(market=self.market, governor=self.risk, fx=self.fx)
         self.detector = OpportunityDetector(market=self.market)
         self.committee = InvestmentCommittee(claude=self.claude)
+        self.explorer = MarketExplorer()
+        self.reviewer = ThesisReviewer()
 
     # ------------------------------------------------------------------
     # Fotografía del estado actual
@@ -114,6 +129,11 @@ class SharkyAgent:
         # take-profit (aviso, no orden). Ver `sharky.level_watch`.
         niveles = self.revisar_niveles(tesis, valuation)
 
+        # Caducidad de alertas ANTES del escaneo: una alerta que caduca hoy
+        # libera su ticker para que el radar pueda volver a emitirla en este
+        # mismo ciclo, con niveles medidos hoy en vez de los de hace un mes.
+        caducadas = self.caducar_alertas()
+
         # Radar de oportunidades, sin reemitir lo que ya está vivo.
         nuevas_alertas = self.detector.scan_for_opportunities(
             snapshots,
@@ -158,6 +178,7 @@ class SharkyAgent:
             events=(
                 f"Vigilancia diaria completada. {len(valuation.posiciones)} posición(es), "
                 f"{len(tesis)} tesis activa(s), {len(nuevas_alertas)} alerta(s) nueva(s), "
+                f"{len(caducadas)} alerta(s) caducada(s), "
                 f"{len(incumplimientos)} incumplimiento(s)."
             ),
             inteligencia_simulada=inteligencia.simulado,
@@ -179,6 +200,7 @@ class SharkyAgent:
             "tesis_activas": len(tesis),
             "incumplimientos": [b.model_dump() for b in incumplimientos],
             "alertas_nuevas": [a.model_dump() for a in nuevas_alertas],
+            "alertas_caducadas": caducadas,
             "diagnostico_radar": list(self.detector.ultimo_diagnostico),
             "alertas_niveles": [a.model_dump(mode="json") for a in niveles],
             "avisos_niveles": [level_watch.texto(a) for a in niveles],
@@ -237,6 +259,31 @@ class SharkyAgent:
         inyectan las dependencias del agente.
         """
         return level_watch.revisar_niveles(tesis, valuation, self.fx)
+
+    def caducar_alertas(self) -> List[Dict[str, str]]:
+        """Cierra las alertas que ya no describen una oportunidad.
+
+        Determinista y sin API. La política vive en
+        `opportunity_detector.alertas_caducadas` (edad, stop roto, objetivo
+        ya alcanzado) y la escritura en `VaultManager.marcar_alerta`: misma
+        separación que entre el filtro cuantitativo y la bóveda.
+        """
+        activas = [a for _, a in self.vault.list_active_alerts()]
+        if not activas:
+            return []
+
+        snapshots = self.market.get_batch_snapshots([a.ticker for a in activas])
+        cerradas: List[Dict[str, str]] = []
+        hoy = date.today().isoformat()
+        for alerta, motivo in alertas_caducadas(activas, snapshots):
+            ruta = self.vault.marcar_alerta(alerta, AlertStatus.EXPIRADA, hoy, motivo=motivo)
+            cerradas.append({
+                "ticker": alerta.ticker,
+                "id_alerta": alerta.id_alerta,
+                "motivo": motivo,
+                "nota": str(ruta) if ruta else "",
+            })
+        return cerradas
 
     def revisar_niveles_ahora(self) -> Dict[str, Any]:
         """Comprueba los niveles sin escribir el diario ni llamar a Claude.
@@ -352,6 +399,107 @@ class SharkyAgent:
         }
 
     # ------------------------------------------------------------------
+    # Exploración de mercado (a demanda)
+    # ------------------------------------------------------------------
+    def run_market_exploration(self) -> Dict[str, Any]:
+        """Busca oportunidades nuevas en el mercado y confirma cuáles aguantan.
+
+        Dos fases que no se mezclan:
+
+          1. **Convicción cualitativa.** `MarketExplorer` busca en la web
+             candidatos fuera de todo lo que Sharky ya vigila, y redacta la
+             tesis de cada uno. No propone ni un solo precio.
+          2. **Confirmación cuantitativa.** Cada candidato pasa por el mismo
+             filtro que `UNIVERSO_CONVICCION` (`scan_universe`): caída desde
+             el máximo anual, tendencia sobre la media de 200 sesiones, stop
+             por volatilidad realizada y R:R mínimo. Sólo los que lo superan
+             se convierten en alerta.
+
+        Una exploración con candidatos y sin alertas es un resultado válido:
+        significa que las ideas son buenas y los precios de hoy no. El informe
+        guarda ambas cosas para poder volver sobre ellas.
+        """
+        fecha_str = date.today().isoformat()
+        valuation, health, _ = self.snapshot_estado()
+        tesis = self.vault.list_active_theses()
+        alertas_vivas = [a for _, a in self.vault.list_active_alerts()]
+        tickers_cartera = [p.ticker for p in valuation.posiciones]
+
+        # Todo lo que Sharky ya vigila por alguna vía. Proponer cualquiera de
+        # estos sería gastar una búsqueda en algo que ya está cubierto.
+        ya_cubierto = sorted({
+            *(t.upper() for t in tickers_cartera),
+            *(a.ticker.upper() for a in alertas_vivas),
+            *(t.ticker.upper() for _, t in tesis if t.ticker),
+            *(t.upper() for t in UNIVERSO_CONVICCION),
+        })
+
+        resultado = self.explorer.explore(
+            ya_cubierto=ya_cubierto,
+            sectores=valuation.exposicion_sectorial_pct,
+            estado_vital=health.estado_vital.value,
+            efectivo_pct=valuation.peso_efectivo_pct,
+            contexto_noticias=self._contexto_noticias_exploracion(),
+        )
+
+        # Fase 2: los precios deciden. Se cotiza por el símbolo que declaró el
+        # explorador, no por el ticker: un candidato europeo puede necesitar
+        # sufijo de mercado (`RHM.DE`) que el ticker interno no lleva.
+        nuevas_alertas: List[OpportunityAlert] = []
+        if resultado.candidatos:
+            snapshots = {
+                c.ticker: self.market.get_snapshot(c.ticker, symbol=c.simbolo or None)
+                for c in resultado.candidatos
+            }
+            nuevas_alertas = self.detector.scan_universe(
+                {c.ticker: c.perfil() for c in resultado.candidatos},
+                snapshots,
+                existing_positions=tickers_cartera,
+                ya_alertado=self.vault.has_active_alert,
+                simbolos={c.ticker: c.simbolo for c in resultado.candidatos},
+            )
+            for alerta in nuevas_alertas:
+                self.vault.write_opportunity_alert(alerta)
+
+        diagnostico = list(self.detector.ultimo_diagnostico) if resultado.candidatos else []
+        ruta = self.vault.write_market_exploration(
+            fecha_str, resultado, diagnostico, nuevas_alertas
+        )
+
+        return {
+            "fecha": fecha_str,
+            "disponible": resultado.disponible,
+            "modelo": resultado.modelo,
+            "error": resultado.error,
+            "aviso_parseo": resultado.aviso_parseo,
+            "busquedas_realizadas": resultado.busquedas_realizadas,
+            "num_fuentes": len(resultado.fuentes),
+            "candidatos": [c.model_dump() for c in resultado.candidatos],
+            "alertas_nuevas": [a.model_dump() for a in nuevas_alertas],
+            "diagnostico_radar": diagnostico,
+            "excluidos": ya_cubierto,
+            "informe_guardado": str(ruta),
+        }
+
+    def _contexto_noticias_exploracion(self) -> str:
+        """Bloque de contexto con el último escaneo semanal, si lo hay.
+
+        Sin esto el explorador buscaría a ciegas cada vez. Con esto arranca
+        sabiendo qué se movió en el mercado la última semana, que es
+        justamente donde suelen abrirse las asimetrías que busca.
+        """
+        ultima = self.vault.leer_ultimas_noticias_semanales()
+        if not ultima or not ultima.get("disponible") or not ultima.get("resumen"):
+            return ""
+        return (
+            "## Lo último que viste en el mercado\n\n"
+            f"Resumen del escaneo de noticias del {ultima['fecha'].isoformat()} "
+            "sobre las posiciones en cartera. Úsalo como pista de qué se está "
+            "moviendo, no como lista de candidatos:\n\n"
+            f"{ultima['resumen']}\n"
+        )
+
+    # ------------------------------------------------------------------
     # Comité de inversión
     # ------------------------------------------------------------------
     def run_investment_committee(self) -> Dict[str, Any]:
@@ -367,9 +515,108 @@ class SharkyAgent:
             macro_snapshots=macro,
             valuation=valuation,
             incumplimientos=incumplimientos,
-            theses_count=len(tesis),
+            # Las tesis enteras, no su recuento: hasta 2026-09 el comité
+            # deliberaba sobre la cartera sin ver ni un ticker de la convicción
+            # que la sostiene.
+            theses=[t for _, t in tesis],
             noticias_recientes=noticias_recientes,
         )
+
+    # ------------------------------------------------------------------
+    # Revisión de tesis
+    # ------------------------------------------------------------------
+    def run_thesis_review(
+        self,
+        conclusion_estudio: str = "",
+        contexto=None,
+    ) -> Dict[str, Any]:
+        """Revisa las tesis que tienen algo que decir y lo anota en cada nota.
+
+        Dos fases, como en el explorador, y por el mismo motivo:
+
+          1. **Selección determinista** (`thesis_review.seleccionar`, sin API):
+             qué tesis se han movido, han tocado un nivel, incumplen algo o
+             salen en las noticias del mes -- más la red de seguridad, para
+             que ninguna quede olvidada por estar tranquila.
+          2. **Juicio cualitativo** (Claude, con el racional COMPLETO de cada
+             tesis, no los 300 caracteres que recibe el estudio mensual).
+
+        Lo que se escribe es una sección fechada encima de lo anterior y dos
+        campos de frontmatter (`fecha_revision`, `veredicto_revision`).
+        Ningún número de la tesis se toca: ver `VaultManager.CAMPOS_INTOCABLES`.
+
+        `contexto` permite reutilizar la valoración que el estudio mensual ya
+        hizo, en vez de volver a cotizar toda la cartera.
+        """
+        mes = self._mes_actual()
+        fecha_str = date.today().isoformat()
+
+        valuation, health, incumplimientos = (
+            contexto if contexto is not None else self.snapshot_estado()
+        )
+        tesis = self.vault.list_active_theses()
+        niveles = self.revisar_niveles(tesis, valuation)
+        memoria = self.vault.leer_memoria_diario(DIAS_CONTEXTO_MENSUAL)
+        noticias = self.vault.leer_noticias_semanales(DIAS_CONTEXTO_MENSUAL)
+
+        a_revisar, omitidas = thesis_review.seleccionar(
+            tesis,
+            memoria=memoria,
+            noticias=noticias,
+            incumplimientos=incumplimientos,
+            niveles=niveles,
+            revisadas=self.vault.leer_fechas_revision_tesis(),
+        )
+
+        resultado = self.reviewer.review(
+            a_revisar,
+            mes=mes,
+            valuation=valuation,
+            conclusion_estudio=conclusion_estudio,
+            contexto_noticias=ClaudeBrainClient._formatear_noticias_del_mes(noticias),
+            contexto_diario=ClaudeBrainClient._formatear_memoria(memoria),
+        )
+
+        # Anotar sólo lo que se pidió revisar y volvió con veredicto. Una tesis
+        # sin veredicto no se toca: es preferible que su `fecha_revision` siga
+        # vieja -- y que la red de seguridad la vuelva a seleccionar -- a
+        # marcarla como revisada cuando nadie la leyó.
+        por_ticker = {s.ticker.upper(): s for s in a_revisar}
+        anotadas: List[Dict[str, str]] = []
+        for veredicto in resultado.veredictos:
+            seleccion = por_ticker.get(veredicto.ticker.upper())
+            if seleccion is None:
+                continue
+            ruta = self.vault.anotar_revision_tesis(
+                seleccion.ruta, veredicto, fecha_str, motivos=seleccion.motivos
+            )
+            anotadas.append({
+                # El ticker canonico es el de la boveda, no el que devuelve el
+                # modelo: `ThesisVerdict` normaliza a mayusculas para poder
+                # casar, y `Rare_Earths` volveria como `RARE_EARTHS`.
+                "ticker": seleccion.ticker,
+                "veredicto": veredicto.veredicto,
+                "propuesta_niveles": veredicto.propuesta_niveles,
+                "nota": str(ruta),
+            })
+
+        return {
+            "fecha": fecha_str,
+            "mes": mes,
+            "disponible": resultado.disponible,
+            "modelo": resultado.modelo,
+            "error": resultado.error,
+            "aviso_parseo": resultado.aviso_parseo,
+            "tesis_activas": len(tesis),
+            "seleccionadas": [
+                {"ticker": s.ticker, "motivos": s.motivos} for s in a_revisar
+            ],
+            "omitidas": [
+                {"ticker": s.ticker, "motivo": s.descarte} for s in omitidas
+            ],
+            "revisadas": anotadas,
+            "sintesis": resultado.texto,
+        }
 
     # ------------------------------------------------------------------
     # Estudio mensual (incluye el rebalanceo del Día 1)
@@ -405,6 +652,9 @@ class SharkyAgent:
            límites del mandato) y lo deja en la bóveda.
         2. Claude lo contrasta con el contexto acumulado del mes: controles
            diarios, escaneos semanales y la conclusión del estudio anterior.
+        3. La revisión de tesis (`run_thesis_review`) devuelve ese juicio al
+           fichero de cada tesis que lo necesite, en vez de dejarlo sólo en
+           la nota del estudio.
         """
         mes = self._mes_actual()
         fecha_str = date.today().isoformat()
@@ -426,6 +676,22 @@ class SharkyAgent:
             mes, fecha_str, resultado, health, ruta_rebalanceo
         )
 
+        # La revisión de tesis cierra el mes: el estudio acaba de dictar
+        # MANTENER/REDUCIR/CERRAR posición a posición, y esto devuelve ese
+        # juicio al fichero de cada tesis en vez de dejarlo morir aquí. Va
+        # DESPUÉS de escribir el estudio y envuelta en su propio try: si la
+        # revisión falla, el estudio -- que es lo caro y ya está en disco --
+        # no se pierde con ella.
+        revision: Dict[str, Any] = {"disponible": False, "error": "no ejecutada"}
+        try:
+            revision = self.run_thesis_review(
+                conclusion_estudio=resultado.conclusion,
+                contexto=(valuation, health, incumplimientos),
+            )
+        except Exception as exc:
+            revision = {"disponible": False, "error": f"{type(exc).__name__}: {exc}"}
+            print(f"[SharkyAgent] La revisión de tesis falló: {exc}")
+
         res = self._resumen_rebalanceo(informe, ruta_rebalanceo)
         res.update({
             "mes": mes,
@@ -433,6 +699,7 @@ class SharkyAgent:
             "estudio_simulado": resultado.simulado,
             "estudio_error": resultado.error,
             "modelo": resultado.modelo,
+            "revision_tesis": revision,
         })
         return res
 

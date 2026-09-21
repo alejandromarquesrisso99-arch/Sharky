@@ -12,11 +12,20 @@ Combina dos ingredientes que se mantienen deliberadamente separados:
 
 Si no hay datos fiables, **no se emite alerta**. Y no se reemite una alerta que
 ya está viva para el mismo activo: el detector consulta la bóveda antes.
+
+`UNIVERSO_CONVICCION` es una lista escrita a mano, así que este detector jamás
+puede encontrar un nombre que no esté ya en ella: sólo confirma o descarta lo
+que se le da. Quien amplía esa lista es el explorador de mercado
+(`sharky.market_explorer`), que busca candidatos nuevos en la web y los pasa
+por este mismo filtro vía `scan_universe`. La frontera entre convicción
+cualitativa y confirmación cuantitativa no se mueve por ello: cambia quién
+redacta la tesis, no quién decide si los precios la respaldan.
 """
 
-from typing import Callable, Dict, List, Optional
-from datetime import datetime
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from datetime import date, datetime
 
+from sharky.config import ALERTA_VIGENCIA_DIAS
 from sharky.market_data import MarketDataProvider
 from sharky.models import AlertStatus, MarketSnapshot, OpportunityAlert
 
@@ -266,6 +275,76 @@ UNIVERSO_CONVICCION: Dict[str, dict] = {
 }
 
 
+def alertas_caducadas(
+    alertas: Sequence[OpportunityAlert],
+    snapshots: Optional[Dict[str, MarketSnapshot]] = None,
+    hoy: Optional[date] = None,
+    vigencia_dias: int = ALERTA_VIGENCIA_DIAS,
+) -> List[Tuple[OpportunityAlert, str]]:
+    """Alertas que ya no describen una oportunidad, con el motivo.
+
+    Determinista y sin API, igual que el resto del radar. Tres criterios, y
+    los tres dicen lo mismo desde ángulos distintos: la asimetría que
+    justificaba la alerta ya no está ahí.
+
+      * **Edad.** Una alerta mide la asimetría de un día concreto. Pasadas
+        unas semanas sus niveles describen un mercado que ya no existe, y el
+        motor de rebalanceo los cruzaría con el precio de hoy.
+      * **Stop roto.** El precio ha caído por debajo del stop que la propia
+        alerta declaró *antes* siquiera de entrar. El nivel que la habría
+        sacado de la posición ya se cumplió.
+      * **Target alcanzado.** El precio llegó al objetivo sin ti: no queda
+        recorrido que justifique el riesgo calculado.
+
+    Los dos criterios de precio sólo se aplican si la cotización es fiable y
+    viene en la misma divisa que declaró la alerta: comparar un stop en EUR
+    contra un precio en USD es el error de unidades que `level_watch` ya
+    evita en las tesis.
+    """
+    hoy = hoy or date.today()
+    snapshots = snapshots or {}
+    caducadas: List[Tuple[OpportunityAlert, str]] = []
+
+    for alerta in alertas:
+        try:
+            emitida = datetime.strptime(alerta.fecha_deteccion, "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            emitida = None
+
+        if emitida is not None and (hoy - emitida).days > vigencia_dias:
+            caducadas.append((
+                alerta,
+                f"Emitida hace {(hoy - emitida).days} días (vigencia {vigencia_dias}): "
+                "sus niveles describen una estructura de precios que ya no rige.",
+            ))
+            continue
+
+        snap = snapshots.get(alerta.ticker)
+        if snap is None or snap.precio_actual <= 0 or not snap.es_fiable:
+            continue
+        if snap.divisa.upper() != alerta.divisa.upper():
+            continue
+
+        if alerta.stop_loss > 0 and snap.precio_actual <= alerta.stop_loss:
+            caducadas.append((
+                alerta,
+                f"El precio ({snap.precio_actual:,.2f} {snap.divisa}) ha roto el stop "
+                f"de la alerta ({alerta.stop_loss:,.2f}) antes de entrar: la "
+                "asimetría que la justificaba ya no existe.",
+            ))
+            continue
+
+        if alerta.target_precio > 0 and snap.precio_actual >= alerta.target_precio:
+            caducadas.append((
+                alerta,
+                f"El precio ({snap.precio_actual:,.2f} {snap.divisa}) ya alcanzó el "
+                f"objetivo ({alerta.target_precio:,.2f}): no queda recorrido que "
+                "justifique el riesgo calculado.",
+            ))
+
+    return caducadas
+
+
 class OpportunityDetector:
     def __init__(self, market: Optional[MarketDataProvider] = None):
         self.market = market or MarketDataProvider()
@@ -285,7 +364,38 @@ class OpportunityDetector:
         una alerta activa en la bóveda, evitando duplicados como los que se
         acumularon con la versión anterior.
         """
+        return self.scan_universe(
+            UNIVERSO_CONVICCION,
+            snapshots,
+            existing_positions=existing_positions,
+            ya_alertado=ya_alertado,
+        )
+
+    def scan_universe(
+        self,
+        universo: Dict[str, dict],
+        snapshots: Dict[str, MarketSnapshot],
+        existing_positions: Optional[List[str]] = None,
+        ya_alertado: Optional[Callable[[str], bool]] = None,
+        simbolos: Optional[Dict[str, str]] = None,
+    ) -> List[OpportunityAlert]:
+        """Aplica el filtro cuantitativo a CUALQUIER universo de convicción.
+
+        Existe para que los candidatos que propone el explorador de mercado
+        (`sharky.market_explorer`, convicción cualitativa buscada en la web)
+        pasen exactamente por la misma puerta que `UNIVERSO_CONVICCION`: los
+        mismos umbrales de caída, tendencia y R:R, la misma exigencia de
+        cotización fiable y de histórico suficiente, y la misma traza de por
+        qué cada candidato pasó o no. Una idea nueva no entra en la bóveda
+        por venir de un modelo más caro; entra porque los precios reales la
+        confirman.
+
+        `simbolos` mapea ticker interno -> símbolo del proveedor, para
+        candidatos que no están en `INSTRUMENT_REGISTRY` y cuyo símbolo de
+        Yahoo no coincide con el ticker (p.ej. una línea de XETRA).
+        """
         en_cartera = {t.upper().strip() for t in (existing_positions or [])}
+        simbolos = {k.upper().strip(): v for k, v in (simbolos or {}).items() if v}
         hoy = datetime.now().strftime("%Y-%m-%d")
         alertas: List[OpportunityAlert] = []
         self.ultimo_diagnostico = []
@@ -295,7 +405,7 @@ class OpportunityDetector:
                 {"ticker": ticker, "veredicto": veredicto, "detalle": detalle}
             )
 
-        for ticker, perfil in UNIVERSO_CONVICCION.items():
+        for ticker, perfil in universo.items():
             if perfil["conviccion"] < CONVICCION_MINIMA:
                 traza(ticker, "DESCARTADO", f"convicción {perfil['conviccion']}/10 < {CONVICCION_MINIMA}")
                 continue
@@ -306,7 +416,8 @@ class OpportunityDetector:
                 traza(ticker, "OMITIDO", "ya tiene una alerta activa en la bóveda")
                 continue
 
-            snap = snapshots.get(ticker) or self.market.get_snapshot(ticker)
+            simbolo = simbolos.get(ticker.upper())
+            snap = snapshots.get(ticker) or self.market.get_snapshot(ticker, symbol=simbolo)
             # Sin cotización fiable no se emite señal: un precio de referencia no
             # justifica una recomendación de compra.
             if snap is None or snap.precio_actual <= 0:
@@ -316,7 +427,7 @@ class OpportunityDetector:
                 traza(ticker, "SIN DATOS", f"cotización de procedencia {snap.fuente.value}")
                 continue
 
-            tecnicos = self.market.get_technicals(ticker)
+            tecnicos = self.market.get_technicals(ticker, symbol=simbolo)
             if not tecnicos:
                 traza(ticker, "SIN DATOS", "histórico insuficiente para medir la estructura anual")
                 continue

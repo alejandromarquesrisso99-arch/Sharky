@@ -305,6 +305,15 @@ a { color: var(--acento); }
 .oportunidad { display: flex; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--borde); }
 .oportunidad:last-child { border-bottom: 0; }
 .oportunidad .datos { font-size: 12.5px; color: var(--tenue); text-align: right; }
+.radar .pie {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--borde);
+}
+.radar .pie .coste { flex: 1; }
+
+.ciclo-vida { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.ciclo-vida .emoji { font-size: 17px; line-height: 1.2; }
+.ciclo-vida .btn { margin-top: 6px; }
 
 /* --------------------------------------------------------------- informes */
 .pestanas { display: flex; gap: 4px; padding: 4px; background: var(--superficie-2); border-radius: 10px; overflow-x: auto; }

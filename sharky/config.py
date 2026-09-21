@@ -125,6 +125,100 @@ NEWS_MAX_TOKENS_INFORME = int(os.getenv("SHARKY_NEWS_MAX_TOKENS_INFORME", "16000
 NEWS_EFFORT = os.getenv("SHARKY_NEWS_EFFORT", "medium").strip()
 
 # --------------------------------------------------------------------------
+# Explorador de mercado (radar de oportunidades a demanda)
+# --------------------------------------------------------------------------
+# El detector determinista (`sharky/opportunity_detector.py`) sólo confirma o
+# descarta los nombres de `UNIVERSO_CONVICCION`, que es una lista escrita a
+# mano: nunca puede encontrar una idea que no esté ya en ella. El explorador
+# es la pieza que cierra ese hueco -- busca en la web candidatos NUEVOS -- y
+# por eso usa el modelo más capaz disponible: proponer una tesis de inversión
+# desde cero es el razonamiento más exigente de toda la cadencia, muy por
+# encima de resumir noticias o repasar posiciones.
+#
+# El reparto de responsabilidades NO cambia: Claude aporta la convicción
+# cualitativa (qué vigilar y por qué), y la confirmación sigue saliendo de
+# precios reales en el mismo filtro de siempre. El explorador no fija
+# precios, stops ni objetivos.
+EXPLORER_MODEL = os.getenv("SHARKY_EXPLORER_MODEL", "claude-opus-5")
+
+# Presupuesto del explorador. Es el más alto de la casa porque el modelo
+# piensa entre búsquedas, cruza sectores y redacta una tesis por candidato.
+# Es un techo, no un gasto fijo: sólo se factura lo generado. Por encima de
+# ~20000 la petición va por streaming (ver `MAX_TOKENS_SIN_STREAMING`).
+EXPLORER_MAX_TOKENS = int(os.getenv("SHARKY_EXPLORER_MAX_TOKENS", "32000"))
+EXPLORER_EFFORT = os.getenv("SHARKY_EXPLORER_EFFORT", "high").strip()
+
+# Búsquedas web máximas por exploración. La tool de búsqueda se factura por
+# búsqueda además de los tokens, igual que en el escaneo semanal.
+EXPLORER_MAX_BUSQUEDAS = int(os.getenv("SHARKY_EXPLORER_MAX_BUSQUEDAS", "20"))
+
+# Candidatos máximos que se aceptan de una exploración. Un radar que propone
+# treinta nombres no es un radar: el límite obliga a priorizar.
+EXPLORER_MAX_CANDIDATOS = int(os.getenv("SHARKY_EXPLORER_MAX_CANDIDATOS", "8"))
+
+# --------------------------------------------------------------------------
+# Vigencia de las alertas de oportunidad
+# --------------------------------------------------------------------------
+# Una alerta es una fotografía: mide la asimetría con la estructura de precios
+# de un día concreto. Hasta 2026-09 ninguna caducaba nunca -- `AlertStatus`
+# definía EXPIRADA desde el principio pero nada la asignaba -- y eso tenía dos
+# efectos silenciosos: el ticker quedaba vetado para siempre en
+# `has_active_alert`, y la alerta seguía entrando cada mes en el rebalanceo con
+# su stop y su target congelados mientras el motor tomaba precio fresco.
+# Mezclar niveles de hace dos meses con el precio de hoy no es conservador: es
+# dimensionar el riesgo con la vara equivocada.
+ALERTA_VIGENCIA_DIAS = int(os.getenv("SHARKY_ALERTA_VIGENCIA_DIAS", "30"))
+
+# --------------------------------------------------------------------------
+# Revisión mensual de tesis (`sharky.thesis_review`)
+# --------------------------------------------------------------------------
+# Hasta 2026-09 una tesis se escribía una vez y no se volvía a tocar nunca:
+# el estudio mensual dictaba MANTENER/REDUCIR/CERRAR posición a posición pero
+# ese veredicto moría en la nota del estudio, mientras el frontmatter de la
+# tesis -- que sí mueve maquinaria viva (`stop_loss` lo lee `level_watch`,
+# `conviccion` lo lee el motor de rebalanceo) -- envejecía sin que nadie lo
+# revisara. Esto cierra ese lazo.
+#
+# Dos decisiones de diseño que NO son negociables desde estas variables:
+#
+#   1. La revisión **añade, nunca sobrescribe.** Lo que pensabas en agosto se
+#      conserva; encima se apila lo que piensas hoy. Una tesis reescrita cada
+#      mes acaba explicando lo que el precio ya hizo, y es peor que una tesis
+#      obsoleta porque *parece* vigente.
+#   2. La revisión **no toca un solo número.** El stop es la única salida
+#      obligatoria del mandato: si pudiera renegociarse cada mes, una posición
+#      que se acerca a su stop recibiría uno más bajo con una justificación
+#      impecable. Los cambios de nivel o de convicción se escriben como
+#      PROPUESTA y los aplicas tú, igual que ya ocurre con el take-profit.
+#
+# Se revisan sólo las tesis que tienen algo que decir (movimiento del mes,
+# nivel alcanzado, incumplimiento abierto, noticias) para no generar prosa
+# sobre posiciones donde no pasó nada -- que es donde nace la deriva
+# narrativa. La red de seguridad de abajo impide que una tesis tranquila
+# quede olvidada para siempre.
+REVIEW_MODEL = os.getenv("SHARKY_REVIEW_MODEL", CLAUDE_MODEL)
+REVIEW_MAX_TOKENS = int(os.getenv("SHARKY_REVIEW_MAX_TOKENS", "24000"))
+REVIEW_EFFORT = os.getenv("SHARKY_REVIEW_EFFORT", "high").strip()
+
+# Meses que una tesis puede pasar sin que nadie la mire, aunque no se haya
+# movido. Mismo criterio que `BREACH_ESCALATION_DAYS` y que la red de
+# seguridad del escaneo semanal: nada queda huérfano indefinidamente sólo
+# porque no haya llamado la atención. Se cuenta desde `fecha_revision` o, si
+# nunca se revisó, desde `fecha_apertura`: una tesis escrita ayer no necesita
+# revisión hoy.
+REVIEW_MESES_MAX = int(os.getenv("SHARKY_REVIEW_MESES_MAX", "3"))
+
+# Variación del precio a lo largo del mes que basta para revisar una tesis.
+# Es un umbral mensual, no diario: una posición que se desliza un 18% en tres
+# semanas sin un solo día de -7% no la marca `UMBRAL_MOVIMIENTO_VIGILANCIA_PCT`
+# y es justo la que hay que releer.
+REVIEW_UMBRAL_MOVIMIENTO_PCT = float(os.getenv("SHARKY_REVIEW_UMBRAL_MOVIMIENTO_PCT", "15"))
+
+# Tope de tesis por ejecución. Las que no entran no se pierden: quedan en la
+# traza con el motivo y vuelven a seleccionarse el mes siguiente.
+REVIEW_MAX_TESIS = int(os.getenv("SHARKY_REVIEW_MAX_TESIS", "12"))
+
+# --------------------------------------------------------------------------
 # Axiomas de dimensionamiento (Reglas_De_Supervivencia.md §2)
 # --------------------------------------------------------------------------
 MAX_POSITION_SIZE_PCT = float(os.getenv("SHARKY_MAX_POS_PCT", "10.0"))

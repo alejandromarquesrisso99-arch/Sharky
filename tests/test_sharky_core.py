@@ -206,6 +206,30 @@ class TestLibroPosiciones:
         ]))
         assert store.load().posiciones[0].ticker == "Physical_Gold"
 
+    def test_tabla_escapa_el_pipe_del_alias_en_cada_fila(self, tmp_path):
+        """El `|` del alias de Obsidian es el separador de columnas de Markdown.
+        Sin escapar, la fila de Rheinmetall tiene 10 celdas en vez de 9 y todo
+        lo que va detrás del enlace se lee una columna corrida."""
+        store = PortfolioStore(tmp_path)
+        store.save(Portfolio(posiciones=[
+            Position(ticker="RHM", nombre="Rheinmetall AG", ticker_cotizacion="RHM.DE",
+                     divisa_cotizacion="EUR", unidades=2.0, coste_unitario_eur=100.0,
+                     sector="Defensa", nota_activo="[[Rheinmetall]]"),
+            Position(ticker="NIO", nombre="NIO Inc.", ticker_cotizacion="9866.HK",
+                     divisa_cotizacion="HKD", unidades=10.0, coste_unitario_eur=5.0,
+                     sector="Automocion_Electrica", nota_activo="[[NIO]]"),
+        ]))
+        filas = [
+            linea for linea in store.ledger_path.read_text(encoding="utf-8").splitlines()
+            if linea.startswith("| [[")
+        ]
+        assert len(filas) == 2
+        for fila in filas:
+            # 9 columnas => 10 separadores `|` sin escapar (inicial y final incluidos).
+            assert fila.replace("\\|", "").count("|") == 10, fila
+        assert "[[Rheinmetall\\|RHM]]" in filas[0]
+        assert "[[NIO]]" in filas[1]  # sin alias, nada que escapar
+
     def test_libro_ausente_falla_con_mensaje_util(self, tmp_path):
         with pytest.raises(FileNotFoundError, match="libro de posiciones"):
             PortfolioStore(tmp_path / "vacio").load()

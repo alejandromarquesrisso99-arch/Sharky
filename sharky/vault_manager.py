@@ -8,7 +8,7 @@ valoradas a coste, análisis simulado), la nota lo declara de forma visible.
 
 from pathlib import Path
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from datetime import date, datetime, timedelta
 
 import yaml
@@ -41,8 +41,17 @@ from sharky.models import (
 )
 from sharky.config import VAULT_PATH
 from sharky.level_watch import texto as texto_nivel
-from sharky.claude_client import CONCLUSION_SEMANA, IntelligenceResult, extraer_conclusion
+from sharky.claude_client import (
+    CONCLUSION_EXPLORACION,
+    CONCLUSION_SEMANA,
+    IntelligenceResult,
+    extraer_conclusion,
+)
 from sharky.news_scanner import NewsScanResult
+
+if TYPE_CHECKING:  # sólo para las anotaciones: no carga esos módulos
+    from sharky.market_explorer import MarketExplorationResult
+    from sharky.thesis_review import ThesisVerdict
 
 ICONOS_VITALES = {
     VitalState.OPTIMO: "🟢",
@@ -150,6 +159,7 @@ class VaultManager:
             "07_Plantillas",
             "08_Rebalanceos_Mensuales",
             "09_Alertas_Oportunidades",
+            "09_Alertas_Oportunidades/Exploraciones",
         ]
         for d in subdirs:
             (self.vault_path / d).mkdir(parents=True, exist_ok=True)
@@ -697,6 +707,154 @@ class VaultManager:
                 print(f"[VaultManager] Tesis ilegible {file.name}: {exc}")
         return theses
 
+    def leer_fechas_revision_tesis(self) -> Dict[str, str]:
+        """Ticker -> `fecha_revision` de cada tesis activa que la tenga.
+
+        Es lo que alimenta la red de seguridad de `thesis_review.seleccionar`:
+        una tesis que nadie ha mirado en meses entra a revisión aunque no se
+        haya movido.
+        """
+        fechas: Dict[str, str] = {}
+        for file in sorted((self.vault_path / "01_Tesis_Activas").glob("*.md")):
+            try:
+                meta, _ = self.parse_markdown(file.read_text(encoding="utf-8"))
+            except OSError:
+                continue
+            ticker = str((meta or {}).get("ticker", "")).strip().upper()
+            revision = (meta or {}).get("fecha_revision")
+            if ticker and revision:
+                fechas[ticker] = str(revision)
+        return fechas
+
+    # ------------------------------------------------------------------
+    # Revisión de tesis
+    # ------------------------------------------------------------------
+    # Campos del frontmatter que una revisión NO puede tocar jamás. El stop es
+    # la única salida obligatoria del mandato y `level_watch` lo compara cada
+    # día contra el precio real; `conviccion` ordena los candidatos de compra
+    # del motor de rebalanceo. Si una revisión mensual pudiera reescribirlos,
+    # una posición que se acerca a su stop recibiría uno más bajo cada mes con
+    # una justificación impecable. La revisión propone; los aplica una persona.
+    CAMPOS_INTOCABLES = (
+        "ticker", "estado", "tipo", "divisa", "precio_entrada", "stop_loss",
+        "target_precio", "conviccion", "ratio_rr", "unidades", "fecha_apertura",
+    )
+
+    # Únicos campos que la revisión escribe.
+    CAMPOS_DE_REVISION = ("fecha_revision", "veredicto_revision")
+
+    def anotar_revision_tesis(
+        self,
+        ruta: Path,
+        veredicto: "ThesisVerdict",
+        fecha_str: str,
+        motivos: Optional[List[str]] = None,
+    ) -> Path:
+        """Apila una revisión fechada sobre una tesis, sin borrar nada.
+
+        La nota crece hacia abajo: lo que se escribió en su día se conserva
+        intacto y encima se apila lo que se piensa hoy. Esa acumulación es el
+        punto -- la única pregunta que enseña algo es *¿tenía razón mi tesis
+        de agosto?*, y no se puede responder si la tesis de agosto ya no
+        existe.
+
+        El frontmatter se edita como TEXTO, no reserializando el YAML: así
+        toda línea que esta función no escribe queda byte a byte idéntica, en
+        vez de "sólo" numéricamente equivalente (un round-trip convierte
+        `3.141590` en `3.14159`). Sobre esa base, `CAMPOS_INTOCABLES` se
+        comprueba además de forma explícita: una regresión futura que
+        intentara mover un stop desde aquí levanta una excepción en vez de
+        asentarlo en silencio.
+        """
+        original = ruta.read_text(encoding="utf-8")
+        meta_previa, _ = self.parse_markdown(original)
+
+        casada = re.match(r"^(---\s*\n)(.*?)(\n---\s*\n)(.*)$", original, re.DOTALL)
+        if not casada:
+            raise ValueError(f"{ruta.name}: la nota no tiene frontmatter que anotar")
+        apertura, frontmatter, cierre, cuerpo = casada.groups()
+
+        frontmatter_nuevo = self._fijar_clave(frontmatter, "fecha_revision", fecha_str)
+        frontmatter_nuevo = self._fijar_clave(
+            frontmatter_nuevo, "veredicto_revision", veredicto.veredicto
+        )
+
+        nuevo = (
+            apertura + frontmatter_nuevo + cierre
+            + self._con_seccion_revision(cuerpo, veredicto, fecha_str, motivos)
+        )
+
+        meta_nueva, _ = self.parse_markdown(nuevo)
+        self._comprobar_campos_intocables(ruta, meta_previa, meta_nueva)
+
+        atomic_write_text(ruta, nuevo, encoding="utf-8")
+        return ruta
+
+    @classmethod
+    def _comprobar_campos_intocables(
+        cls, ruta: Path, previa: Dict[str, Any], nueva: Dict[str, Any]
+    ) -> None:
+        cambiados = [
+            campo for campo in cls.CAMPOS_INTOCABLES
+            if previa.get(campo) != nueva.get(campo)
+        ]
+        if cambiados:
+            raise ValueError(
+                f"{ruta.name}: una revisión ha intentado modificar "
+                f"{', '.join(cambiados)}. Esos campos sólo los cambia una persona."
+            )
+
+    @staticmethod
+    def _fijar_clave(frontmatter: str, clave: str, valor: str) -> str:
+        """Fija `clave: valor` en el frontmatter, sin tocar el resto del texto.
+
+        Sólo se usa con claves de valor escalar en la misma línea
+        (`CAMPOS_DE_REVISION`): sustituir una clave cuyo valor fuera una lista
+        de varias líneas dejaría los elementos huérfanos.
+        """
+        patron = re.compile(rf"^{re.escape(clave)}:[^\n]*$", re.MULTILINE)
+        linea = f"{clave}: {valor}"
+        if patron.search(frontmatter):
+            return patron.sub(linea, frontmatter, count=1)
+        return frontmatter.rstrip("\n") + "\n" + linea
+
+    @staticmethod
+    def _con_seccion_revision(
+        cuerpo: str,
+        veredicto: "ThesisVerdict",
+        fecha_str: str,
+        motivos: Optional[List[str]] = None,
+    ) -> str:
+        """Inserta la sección antes de los enlaces del grafo, o al final."""
+        iconos = {
+            "MANTENER": "\U0001f7e2", "AMPLIAR": "\U0001f535",
+            "REDUCIR": "\U0001f7e1", "CERRAR": "\U0001f534",
+        }
+        motivo = (
+            f"> Seleccionada para revisión porque: {', '.join(motivos)}.\n\n"
+            if motivos else ""
+        )
+        propuesta = ""
+        if veredicto.propuesta_niveles.strip():
+            propuesta = (
+                "\n> [!WARNING]\n"
+                "> **Propuesta de niveles — NO aplicada.** "
+                f"{veredicto.propuesta_niveles.strip()}\n"
+                "> Los niveles de este frontmatter sólo los cambia una persona: "
+                "revisa la propuesta y edítalos tú si estás de acuerdo.\n"
+            )
+
+        seccion = f"""## \U0001f504 Revisión {fecha_str} — {iconos.get(veredicto.veredicto, '')} {veredicto.veredicto}
+
+{motivo}**Qué ha cambiado:** {veredicto.que_ha_cambiado.strip() or "_Sin cambios relevantes registrados._"}
+
+**Qué sigue en pie:** {veredicto.que_sigue_en_pie.strip() or "_Sin detallar._"}
+
+**Qué la invalidaría ahora:** {veredicto.que_la_invalidaria.strip() or "_Sin detallar._"}
+{propuesta}"""
+
+        return VaultManager._insertar_antes_del_grafo(cuerpo, seccion)
+
     # ------------------------------------------------------------------
     # Alertas
     # ------------------------------------------------------------------
@@ -840,6 +998,533 @@ class VaultManager:
             f"* 🚨 [[{file_path.stem}]] — **{alert.empresa}** ({alert.ticker})",
         )
         return file_path
+
+    # ------------------------------------------------------------------
+    # Exploraciones de mercado
+    # ------------------------------------------------------------------
+    def write_market_exploration(
+        self,
+        fecha_str: str,
+        resultado: "MarketExplorationResult",
+        diagnostico: List[Dict[str, str]],
+        alertas_emitidas: List[OpportunityAlert],
+    ) -> Path:
+        """Registra una exploración de mercado con el veredicto de cada candidato.
+
+        La nota guarda por separado y a la vista las dos mitades del proceso:
+        la tesis cualitativa que propuso Claude y lo que el filtro
+        cuantitativo dijo de cada candidato con precios reales. Una
+        exploración con ocho candidatos y cero alertas es un resultado
+        legítimo -- la empresa puede ser excelente y su precio no ofrecer
+        asimetría hoy -- y esta tabla es lo que impide leerlo como un fallo.
+        """
+        file_path = (
+            self.vault_path / "09_Alertas_Oportunidades" / "Exploraciones"
+            / f"{fecha_str}_Exploracion_Mercado.md"
+        )
+
+        propuestos = [c.ticker for c in resultado.candidatos]
+        emitidas = [a.ticker for a in alertas_emitidas]
+
+        meta = {
+            "tipo": "exploracion_mercado",
+            "fecha": fecha_str,
+            "modelo": resultado.modelo,
+            "disponible": resultado.disponible,
+            "busquedas_realizadas": resultado.busquedas_realizadas,
+            "candidatos_propuestos": len(propuestos),
+            "alertas_emitidas": len(emitidas),
+            "tickers_propuestos": propuestos,
+            "tickers_alertados": emitidas,
+            "conclusion_exploracion": (
+                extraer_conclusion(resultado.texto, CONCLUSION_EXPLORACION)
+                if resultado.disponible else ""
+            ),
+        }
+
+        aviso = ""
+        if not resultado.disponible:
+            aviso = (
+                "\n> [!WARNING]\n"
+                "> **Exploración no disponible.** "
+                f"{resultado.error or 'Sin más detalle.'} Configura "
+                "`ANTHROPIC_API_KEY` en `.env` para que la búsqueda se ejecute.\n"
+            )
+        elif resultado.aviso_parseo:
+            aviso = (
+                "\n> [!WARNING]\n"
+                f"> **No se pudo leer la lista de candidatos:** {resultado.aviso_parseo}.\n"
+                "> El informe de abajo sigue siendo válido, pero ningún candidato pasó "
+                "por el filtro cuantitativo y no se ha emitido ninguna alerta.\n"
+            )
+
+        fuentes_md = "\n".join(f"- {f}" for f in resultado.fuentes) or "- Sin fuentes citadas."
+
+        cuerpo = f"""# 🔭 Exploración de Mercado: {fecha_str}
+
+> [!INFO]
+> **Búsqueda activa de oportunidades fuera del universo de vigilancia.**
+> **Candidatos propuestos:** `{len(propuestos)}` | **Confirmados por datos:** `{len(emitidas)}` | **Búsquedas web:** `{resultado.busquedas_realizadas}`
+{aviso}
+---
+
+## 1. Candidatos Propuestos
+
+{resultado.texto or "_Sin informe._"}
+
+---
+
+## 2. Veredicto Cuantitativo
+
+> La convicción de arriba es cualitativa. Esta tabla es lo que dicen los
+> precios reales: se aplican los mismos umbrales que a cualquier otra alerta
+> ([[09_Alertas_Oportunidades]]). Un `NO CUALIFICA` no descarta la empresa,
+> descarta su precio de hoy.
+
+{self._tabla_diagnostico(diagnostico)}
+
+---
+
+## 3. Alertas Emitidas
+
+{self._lista_alertas_emitidas(alertas_emitidas)}
+
+---
+
+## 4. Fuentes Citadas
+
+{fuentes_md}
+
+---
+
+## 🔗 Enlaces del Grafo
+
+* MOC: [[09_Alertas_Oportunidades]] | Cartera: [[Cartera_Real]]
+* Riesgo: [[Politica_Control_Riesgo]] | Rebalanceo: [[08_Rebalanceos_Mensuales]]
+"""
+        atomic_write_text(file_path, self.build_markdown(meta, cuerpo), encoding="utf-8")
+        self._append_to_moc(
+            "09_Alertas_Oportunidades",
+            "## 🔭 Exploraciones de Mercado",
+            f"* 🔭 [[{file_path.stem}]] — {len(propuestos)} candidato(s), "
+            f"{len(emitidas)} alerta(s)",
+        )
+        return file_path
+
+    @staticmethod
+    def _tabla_diagnostico(diagnostico: List[Dict[str, str]]) -> str:
+        """Traza del filtro cuantitativo, un candidato por fila."""
+        if not diagnostico:
+            return "_No se evaluó ningún candidato._"
+        iconos = {
+            "ALERTA": "🚨", "NO CUALIFICA": "⚪", "SIN DATOS": "❓",
+            "OMITIDO": "↩️", "DESCARTADO": "🚫",
+        }
+        filas = "\n".join(
+            f"| {iconos.get(d['veredicto'], '·')} `{d['ticker']}` | "
+            f"**{d['veredicto']}** | {d['detalle']} |"
+            for d in diagnostico
+        )
+        return (
+            "| Candidato | Veredicto | Motivo |\n"
+            "| :--- | :--- | :--- |\n"
+            f"{filas}"
+        )
+
+    def _lista_alertas_emitidas(self, alertas: List[OpportunityAlert]) -> str:
+        if not alertas:
+            return (
+                "_Ningún candidato superó el filtro cuantitativo, así que no se ha "
+                "emitido ninguna alerta. La exploración queda como registro de ideas "
+                "para volver a mirarlas cuando el precio acompañe._"
+            )
+        return "\n".join(
+            f"* 🚨 **{a.empresa}** ({self.enlace(a.ticker)}) — convicción "
+            f"`{a.conviccion}/10`, R:R `{a.ratio_rr:.2f}:1`, potencial "
+            f"`+{a.potencial_ganancia_pct:.1f}%` frente a `-{a.riesgo_maximo_pct:.1f}%`."
+            for a in alertas
+        )
+
+    def leer_ultima_exploracion(self) -> Optional[Dict[str, Any]]:
+        """Frontmatter de la exploración de mercado más reciente, si la hay.
+
+        La usa la app para enseñar en el radar cuándo se exploró por última
+        vez y con qué resultado, igual que la tarjeta de noticias usa
+        `leer_ultimas_noticias_semanales`.
+        """
+        carpeta = self.vault_path / "09_Alertas_Oportunidades" / "Exploraciones"
+        if not carpeta.exists():
+            return None
+        elegido: Optional[Dict[str, Any]] = None
+        for file in carpeta.glob("*_Exploracion_Mercado.md"):
+            try:
+                meta, _ = self.parse_markdown(file.read_text(encoding="utf-8"))
+                fecha = datetime.strptime(str(meta.get("fecha", "")), "%Y-%m-%d").date()
+            except (OSError, ValueError):
+                continue
+            if elegido is None or fecha > elegido["fecha"]:
+                elegido = {
+                    "fecha": fecha,
+                    "id": file.relative_to(self.vault_path).as_posix(),
+                    "disponible": bool(meta.get("disponible", True)),
+                    "modelo": str(meta.get("modelo") or ""),
+                    "candidatos": int(meta.get("candidatos_propuestos") or 0),
+                    "alertas": int(meta.get("alertas_emitidas") or 0),
+                    "conclusion": str(meta.get("conclusion_exploracion") or ""),
+                }
+        return elegido
+
+    # ------------------------------------------------------------------
+    # Ciclo de vida de una tesis
+    # ------------------------------------------------------------------
+    # Una tesis nace de una alerta ejecutada y muere en la venta que cierra la
+    # posición. Hasta 2026-09 no hacía ninguna de las dos cosas sola, y la
+    # segunda omisión tenía consecuencias: una tesis sin posición abierta entra
+    # en `MonthlyRebalanceEngine._candidatos` como candidata de COMPRA, así que
+    # vender por stop dejaba viva una tesis que el Día 1 siguiente proponía
+    # recomprar -- con la convicción intacta y unos niveles que el mercado
+    # acababa de demostrar falsos.
+    #
+    # A diferencia de la revisión mensual, aquí sí se cambia `estado`: cerrar
+    # una tesis no es un juicio del modelo sino un hecho contable (vendiste).
+    # La prosa, en cambio, sigue la misma regla que la revisión -- se apila una
+    # sección de cierre, no se reescribe nada.
+    def buscar_tesis(self, ticker: str, carpeta: str = "01_Tesis_Activas") -> Optional[Path]:
+        """Ruta de la nota de tesis de `ticker`, si existe en esa carpeta."""
+        clave = (ticker or "").upper().strip()
+        if not clave:
+            return None
+        for file in sorted((self.vault_path / carpeta).glob("*.md")):
+            if file.stem == file.parent.name:
+                continue
+            try:
+                meta, _ = self.parse_markdown(file.read_text(encoding="utf-8"))
+            except OSError:
+                continue
+            if str((meta or {}).get("ticker", "")).upper().strip() == clave:
+                return file
+        return None
+
+    def cerrar_tesis(
+        self,
+        ticker: str,
+        fecha_str: str,
+        pnl_realizado_eur: Optional[float] = None,
+        motivo: str = "",
+        precio_salida: Optional[float] = None,
+        divisa: str = "",
+    ) -> Optional[Path]:
+        """Archiva la tesis de `ticker` en `02_Tesis_Cerradas`.
+
+        Devuelve la ruta nueva, o None si esa tesis no existía (posición sin
+        tesis documentada: es legítimo y no debe romper el registro de una
+        venta real).
+        """
+        origen = self.buscar_tesis(ticker)
+        if origen is None:
+            return None
+
+        original = origen.read_text(encoding="utf-8")
+        casada = re.match(r"^(---\s*\n)(.*?)(\n---\s*\n)(.*)$", original, re.DOTALL)
+        if not casada:
+            return None
+        apertura, frontmatter, cierre, cuerpo = casada.groups()
+
+        frontmatter = self._fijar_clave(frontmatter, "estado", "Cerrada")
+        frontmatter = self._fijar_clave(frontmatter, "fecha_cierre", fecha_str)
+        frontmatter = self._fijar_clave(frontmatter, "tiene_posicion", "false")
+        if pnl_realizado_eur is not None:
+            frontmatter = self._fijar_clave(
+                frontmatter, "pnl_realizado_eur", f"{pnl_realizado_eur:.2f}"
+            )
+
+        resultado = ""
+        if pnl_realizado_eur is not None:
+            signo = "ganancia" if pnl_realizado_eur >= 0 else "pérdida"
+            resultado = f"\n**Resultado realizado:** {pnl_realizado_eur:+,.2f} € ({signo})."
+        salida = ""
+        if precio_salida:
+            salida = f"\n**Precio de salida:** {precio_salida:,.2f} {divisa or ''}".rstrip()
+
+        seccion = f"""## \U0001f4c1 Cierre {fecha_str}
+
+> Esta tesis está cerrada. Se conserva como registro: lo que se pensó al
+> abrirla y en cada revisión sigue escrito arriba, sin tocar.
+
+**Motivo:** {motivo or "venta registrada en la bitácora."}{resultado}{salida}
+
+**Pendiente de post-mortem:** ¿qué parte de la tesis original se cumplió y
+qué parte no? Si el cierre vino de un stop-loss, la lección va a
+[[06_Lecciones_Aprendidas]] (ver el protocolo en [[02_Tesis_Cerradas]]).
+"""
+
+        nuevo = apertura + frontmatter + cierre + self._insertar_antes_del_grafo(cuerpo, seccion)
+
+        destino = self.vault_path / "02_Tesis_Cerradas" / origen.name
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(destino, nuevo, encoding="utf-8")
+        origen.unlink(missing_ok=True)
+
+        self._retirar_de_moc("01_Tesis_Activas", origen.stem)
+        self._append_to_moc(
+            "02_Tesis_Cerradas",
+            "## 📋 Registro Histórico de Tesis",
+            f"* 📁 [[{destino.stem}]] — **{ticker}** cerrada el {fecha_str}"
+            + (f" ({pnl_realizado_eur:+,.2f} €)" if pnl_realizado_eur is not None else ""),
+        )
+        return destino
+
+    def crear_tesis_desde_alerta(
+        self,
+        alerta: OpportunityAlert,
+        fecha_str: str,
+        precio_entrada: float,
+        divisa_entrada: str = "",
+        stop_loss: float = 0.0,
+        target_precio: float = 0.0,
+        sector: str = "",
+        id_operacion: str = "",
+    ) -> Path:
+        """Convierte una alerta ejecutada en tesis activa.
+
+        La alerta ya traía `stop_loss`, `target_precio` y `ratio_rr` calculados
+        con la estructura real de precios: sin este puente esos niveles se
+        quedaban en la nota de la alerta y la posición recién comprada no tenía
+        ningún stop que `level_watch` pudiera vigilar hasta que alguien
+        escribiera la tesis a mano.
+
+        Los niveles que se asientan son los de la ORDEN, no los de la alerta:
+        si compraste a otro precio o con otro stop, manda lo que ejecutaste.
+        """
+        destino = self.vault_path / "01_Tesis_Activas" / f"Tesis_{alerta.ticker}.md"
+        divisa = divisa_entrada or alerta.divisa
+        stop = stop_loss or alerta.stop_loss
+        target = target_precio or alerta.target_precio
+
+        riesgo = precio_entrada - stop
+        ratio = round((target - precio_entrada) / riesgo, 2) if riesgo > 0 else alerta.ratio_rr
+
+        meta = {
+            "ticker": alerta.ticker,
+            "empresa": alerta.empresa,
+            "tipo": "Largo",
+            "estado": "Activa",
+            "precio_entrada": round(precio_entrada, 4),
+            "stop_loss": round(stop, 4),
+            "target_precio": round(target, 4),
+            "conviccion": alerta.conviccion,
+            "ratio_rr": ratio,
+            "fecha_apertura": fecha_str,
+            "sectores": f"[[{sector}]]" if sector else "",
+            "empresa_nota": f"[[{alerta.ticker}]]",
+            "divisa": divisa,
+            "tiene_posicion": True,
+            "origen_alerta": alerta.id_alerta,
+        }
+
+        tesis, catalizadores, riesgos = self._secciones_de_alerta(
+            alerta.descripcion_oportunidad
+        )
+        operacion = (
+            f"\n* Operación de apertura: `{id_operacion}` ([[04_Operaciones_Bitacora]])"
+            if id_operacion else ""
+        )
+
+        cuerpo = f"""# 🎯 Tesis de Inversión: {alerta.empresa} ({alerta.ticker})
+
+> [!NOTE]
+> **Tesis abierta desde una alerta del radar** (`{alerta.id_alerta}`), al
+> registrar la compra del {fecha_str}. La convicción y el racional vienen de
+> la alerta; los niveles, de la orden realmente ejecutada.
+
+---
+
+## 💡 Racional de Inversión
+
+{tesis}
+
+---
+
+## 🚀 Catalizadores Principales
+
+{catalizadores}
+
+---
+
+## ⚠️ Riesgos Monitoreados
+
+{riesgos}
+
+---
+
+## 🛑 Plan de Riesgo y Salida
+
+| Parámetro | Valor |
+| :--- | ---: |
+| **Entrada ejecutada** | `{precio_entrada:,.2f} {divisa}` |
+| **Stop Loss Innegociable** | `{stop:,.2f} {divisa}` |
+| **Target Objetivo** | `{target:,.2f} {divisa}` |
+| **Ratio R:R** | `{ratio:.2f} : 1` |
+| **Peso máximo en cartera** | `{alerta.pct_max_cartera:.1f}%` |
+
+> El stop-loss es la única salida obligatoria del mandato: [[level_watch]] lo
+> compara cada día contra el precio real ([[Reglas_De_Supervivencia]]).
+
+---
+
+## 🔗 Enlaces Bidireccionales del Grafo
+
+* Ficha de Empresa: {self.enlace(alerta.ticker)}
+* Alerta de origen: [[{alerta.fecha_deteccion}_ALERTA_{alerta.id_alerta}]]
+* Cartera (fuente de verdad): [[Cartera_Real]]
+* Validación de Riesgo: [[Politica_Control_Riesgo]], [[Reglas_De_Supervivencia]]
+* MOC de Tesis: [[01_Tesis_Activas]]{operacion}
+"""
+        atomic_write_text(destino, self.build_markdown(meta, cuerpo), encoding="utf-8")
+        self._append_to_moc(
+            "01_Tesis_Activas",
+            "## 📈 Tesis Vivas",
+            f"* 🎯 [[{destino.stem}]] — **{alerta.empresa}** ({alerta.ticker})",
+        )
+        return destino
+
+    @staticmethod
+    def _secciones_de_alerta(cuerpo: str) -> Tuple[str, str, str]:
+        """Aísla tesis, catalizadores y riesgos del cuerpo de una alerta.
+
+        `list_active_alerts` reconstruye la alerta desde disco con el cuerpo
+        entero en `descripcion_oportunidad` -- los catalizadores y los riesgos
+        viven ahí como prosa, no como campos. Copiar el cuerpo completo a la
+        tesis arrastraría tablas de precios ya caducadas, así que se extraen
+        las tres secciones que sí son convicción.
+        """
+        def seccion(desde: str, hasta: str, defecto: str) -> str:
+            i = cuerpo.find(desde)
+            if i == -1:
+                return defecto
+            j = cuerpo.find(hasta, i)
+            trozo = cuerpo[i + len(desde): j if j != -1 else None]
+            return trozo.strip().strip("-").strip() or defecto
+
+        # Una alerta recién construida en memoria (no releída de disco) trae su
+        # racional como texto plano, sin los encabezados que escribe
+        # `write_opportunity_alert`. En ese caso el cuerpo entero ES el
+        # racional, y perderlo dejaría la tesis sin la convicción que la
+        # justifica.
+        sin_formato = "## " not in cuerpo
+        defecto_tesis = cuerpo.strip() if sin_formato and cuerpo.strip() else (
+            "_Racional heredado de la alerta._"
+        )
+        return (
+            seccion("## 💎 1. Tesis Rápida", "## ⚡ 2.", defecto_tesis),
+            seccion("## ⚡ 2. Catalizadores", "## 🎯 3.", "1. _Pendiente de detallar._"),
+            seccion("## ⚠️ 4. Riesgos y Puntos Ciegos", "## 📌 5.", "* _Pendiente de detallar._"),
+        )
+
+    @staticmethod
+    def _insertar_antes_del_grafo(cuerpo: str, seccion: str) -> str:
+        """Inserta una sección antes de los enlaces del grafo, o al final."""
+        marca = re.search(r"^## \U0001f517", cuerpo, re.MULTILINE)
+        if marca:
+            return (
+                cuerpo[: marca.start()].rstrip("\n")
+                + "\n\n" + seccion.rstrip("\n")
+                + "\n\n---\n\n" + cuerpo[marca.start():]
+            )
+        return cuerpo.rstrip("\n") + "\n\n---\n\n" + seccion
+
+    # ------------------------------------------------------------------
+    # Ciclo de vida de una alerta
+    # ------------------------------------------------------------------
+    def marcar_alerta(
+        self,
+        alerta: OpportunityAlert,
+        estado: AlertStatus,
+        fecha_str: str,
+        motivo: str = "",
+    ) -> Optional[Path]:
+        """Cierra una alerta con su estado y motivo, y la saca del radar activo.
+
+        `AlertStatus` define EJECUTADA, DESCARTADA y EXPIRADA desde el
+        principio, pero hasta 2026-09 nada las asignaba: toda alerta nacía
+        ACTIVA y ahí se quedaba. Dos consecuencias, las dos silenciosas: el
+        ticker quedaba vetado para siempre en `has_active_alert`, y la alerta
+        seguía entrando cada mes en el rebalanceo con sus niveles congelados
+        mientras el motor tomaba precio fresco.
+        """
+        carpeta = self.vault_path / "09_Alertas_Oportunidades"
+        # El nombre canónico lo fija `write_opportunity_alert`; el barrido por
+        # `id_alerta` cubre las notas heredadas de la versión anterior, que
+        # seguían otra convención de nombre (`..._ALERTA_ASML_Monopolio_HighNA`).
+        candidata: Optional[Path] = carpeta / (
+            f"{alerta.fecha_deteccion}_ALERTA_{alerta.id_alerta}.md"
+        )
+        if candidata is not None and not candidata.exists():
+            candidata = next(
+                (
+                    f for f in sorted(carpeta.glob("*.md"))
+                    if self.parse_markdown(f.read_text(encoding="utf-8"))[0].get("id_alerta")
+                    == alerta.id_alerta
+                ),
+                None,
+            )
+        if candidata is None or not candidata.exists():
+            return None
+        ruta = candidata
+
+        original = ruta.read_text(encoding="utf-8")
+        casada = re.match(r"^(---\s*\n)(.*?)(\n---\s*\n)(.*)$", original, re.DOTALL)
+        if not casada:
+            return None
+        apertura, frontmatter, cierre, cuerpo = casada.groups()
+
+        frontmatter = self._fijar_clave(frontmatter, "estado", estado.value)
+        frontmatter = self._fijar_clave(frontmatter, "fecha_cierre_alerta", fecha_str)
+        if motivo:
+            frontmatter = self._fijar_clave(
+                frontmatter, "motivo_cierre", yaml.safe_dump(motivo, allow_unicode=True).strip()
+            )
+
+        aviso = (
+            f"\n> [!NOTE]\n"
+            f"> **Alerta {estado.value} el {fecha_str}.** {motivo}\n"
+            f"> Los niveles de abajo son los del día de emisión "
+            f"(`{alerta.fecha_deteccion}`) y ya no se vigilan.\n"
+        )
+        # El aviso va arriba del todo: quien abra la nota tiene que ver que no
+        # está viva antes de leer un precio de entrada que ya no sirve.
+        cuerpo = re.sub(r"^(# .*\n)", r"\1" + aviso, cuerpo, count=1) or (aviso + cuerpo)
+
+        atomic_write_text(ruta, apertura + frontmatter + cierre + cuerpo, encoding="utf-8")
+
+        self._retirar_de_moc("09_Alertas_Oportunidades", ruta.stem)
+        icono = {"EJECUTADA": "✅", "EXPIRADA": "⚪", "DESCARTADA": "🚫"}.get(estado.value, "·")
+        self._append_to_moc(
+            "09_Alertas_Oportunidades",
+            "## 🗄️ Alertas Caducadas / Histórico",
+            f"* {icono} [[{ruta.stem}]] — **{alerta.empresa}** ({alerta.ticker}) — "
+            f"`{estado.value}` el {fecha_str}. {motivo}",
+        )
+        return ruta
+
+    def _retirar_de_moc(self, carpeta: str, nombre_nota: str) -> None:
+        """Borra del MOC la línea que enlaza a `nombre_nota`.
+
+        Complementa a `_append_to_moc`: sin esto, una alerta caducada seguiría
+        figurando bajo "Alertas Activas en Radar" además de aparecer en el
+        histórico, y el MOC diría dos cosas contradictorias a la vez.
+        """
+        moc_path = self.vault_path / carpeta / f"{carpeta}.md"
+        if not moc_path.exists():
+            return
+        texto = moc_path.read_text(encoding="utf-8")
+        lineas = [
+            linea for linea in texto.splitlines()
+            if f"[[{nombre_nota}]]" not in linea
+        ]
+        nuevo = "\n".join(lineas)
+        if nuevo != texto:
+            atomic_write_text(moc_path, nuevo.rstrip() + "\n", encoding="utf-8")
 
     # ------------------------------------------------------------------
     # Operaciones

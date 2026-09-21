@@ -21,7 +21,9 @@ from sharky.file_lock import exclusive_lock
 from sharky.fx import FxProvider
 from sharky.market_data import MarketDataProvider
 from sharky.models import (
+    AlertStatus,
     AssetClass,
+    LevelKind,
     OrderStatus,
     OrderType,
     Position,
@@ -42,6 +44,12 @@ class TradeResult(BaseModel):
     nota_operacion: Optional[str] = None
     nav_posterior_eur: Optional[float] = None
     efectivo_posterior_eur: Optional[float] = None
+    # Consecuencias de la operación sobre el ciclo de vida de la convicción:
+    # una compra desde una alerta abre tesis y consume la alerta; una venta
+    # que deja la posición a cero la cierra. Ver `_ciclo_de_vida_tesis`.
+    tesis_abierta: Optional[str] = None
+    tesis_cerrada: Optional[str] = None
+    alerta_actualizada: Optional[str] = None
 
 
 class TradeRecorder:
@@ -276,6 +284,7 @@ class TradeRecorder:
         # ocurrió en el broker), sólo avisar de qué escritura posterior falló en
         # vez de dejarlo desincronizado en silencio (ver INFRA-3).
         avisos_post_asiento = ""
+        niveles_hoy = []
         try:
             # Recarga los niveles que el ciclo diario ya dejó hoy en disco: sin
             # esto, registrar esta operación borraría del cuadro de mandos el
@@ -302,6 +311,19 @@ class TradeRecorder:
         except Exception as exc:
             avisos_post_asiento += f"\n\n⚠️ Tampoco se pudo escribir la nota de la operación: {exc}"
 
+        # Igual que las dos escrituras anteriores: el asiento ya es real y no
+        # se deshace porque falle lo que viene después, sólo se avisa.
+        tesis_abierta = tesis_cerrada = alerta_actualizada = None
+        try:
+            tesis_abierta, tesis_cerrada, alerta_actualizada = self._ciclo_de_vida_tesis(
+                orden, sector_efectivo, pnl_realizado, niveles_hoy
+            )
+        except Exception as exc:
+            avisos_post_asiento += (
+                f"\n\n⚠️ La operación quedó asentada, pero no se pudo actualizar el "
+                f"ciclo de vida de la tesis o la alerta: {exc}"
+            )
+
         return TradeResult(
             aprobada=True,
             motivo=motivo + avisos_post_asiento,
@@ -310,4 +332,88 @@ class TradeRecorder:
             nota_operacion=str(nota) if nota else None,
             nav_posterior_eur=nueva_valoracion.nav_eur,
             efectivo_posterior_eur=nueva_valoracion.efectivo_eur,
+            tesis_abierta=tesis_abierta,
+            tesis_cerrada=tesis_cerrada,
+            alerta_actualizada=alerta_actualizada,
         )
+
+    # ------------------------------------------------------------------
+    def _ciclo_de_vida_tesis(self, orden, sector, pnl_realizado, niveles_hoy):
+        """Abre o cierra la tesis y consume la alerta que originó la compra.
+
+        Hasta 2026-09 este método no existía y las dos puntas del ciclo
+        quedaban sueltas:
+
+          * **Al comprar**, la alerta seguía ACTIVA para siempre (vetando el
+            ticker en `has_active_alert`) y la posición recién abierta no
+            tenía tesis, así que `level_watch` no vigilaba ningún stop --
+            aunque la alerta ya traía uno calculado con precios reales.
+          * **Al vender**, la tesis se quedaba en `01_Tesis_Activas` sin
+            posición, que es justo la condición que la convierte en candidata
+            de COMPRA para `MonthlyRebalanceEngine._candidatos`: vender por
+            stop dejaba al motor proponiendo recomprarlo el Día 1 siguiente.
+
+        Devuelve `(tesis_abierta, tesis_cerrada, alerta_actualizada)`.
+        """
+        fecha = orden.fecha_ejecucion.strftime("%Y-%m-%d")
+        ticker = orden.ticker
+        tesis_abierta = tesis_cerrada = alerta_actualizada = None
+
+        if orden.tipo_orden == OrderType.COMPRA:
+            alerta = next(
+                (a for _, a in self.vault.list_active_alerts()
+                 if a.ticker.upper() == ticker.upper()),
+                None,
+            )
+            if alerta is None:
+                return None, None, None
+
+            # Una tesis ya escrita a mano manda sobre la de la alerta: es
+            # convicción propia y no se sobrescribe.
+            if self.vault.buscar_tesis(ticker) is None:
+                ruta = self.vault.crear_tesis_desde_alerta(
+                    alerta,
+                    fecha_str=fecha,
+                    precio_entrada=orden.precio_ejecutado,
+                    divisa_entrada=orden.divisa_ejecucion,
+                    stop_loss=orden.stop_loss,
+                    target_precio=orden.target_precio,
+                    sector=sector,
+                    id_operacion=orden.id_operacion,
+                )
+                tesis_abierta = str(ruta)
+
+            ruta_alerta = self.vault.marcar_alerta(
+                alerta, AlertStatus.EJECUTADA, fecha,
+                motivo=f"Comprada en la operación `{orden.id_operacion}`.",
+            )
+            alerta_actualizada = str(ruta_alerta) if ruta_alerta else None
+            return tesis_abierta, None, alerta_actualizada
+
+        # VENTA: sólo cierra la tesis si la posición queda a cero. Una venta
+        # parcial reduce tamaño, no invalida la convicción.
+        if orden.estado != OrderStatus.CERRADA:
+            return None, None, None
+
+        motivo = "Venta registrada: la posición queda cerrada."
+        if any(
+            n.tipo is LevelKind.STOP_LOSS and n.ticker.upper() == ticker.upper()
+            for n in (niveles_hoy or [])
+        ):
+            motivo = (
+                "Stop-loss alcanzado: salida obligatoria del mandato "
+                "([[Reglas_De_Supervivencia]])."
+            )
+        elif pnl_realizado is not None and pnl_realizado > 0:
+            motivo = "Venta con beneficio realizado: toma de beneficios o rotación."
+
+        ruta = self.vault.cerrar_tesis(
+            ticker,
+            fecha_str=fecha,
+            pnl_realizado_eur=pnl_realizado,
+            motivo=motivo,
+            precio_salida=orden.precio_ejecutado,
+            divisa=orden.divisa_ejecucion,
+        )
+        tesis_cerrada = str(ruta) if ruta else None
+        return None, tesis_cerrada, None

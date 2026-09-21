@@ -82,6 +82,8 @@ informe lo enumera en `datos_ausentes` en lugar de rellenarlo.
 | `sharky/trade_ledger.py` | Registro de operaciones. Único camino de escritura al libro. |
 | `sharky/rebalance_engine.py` | Plan del Día 1 por prioridades del mandato. |
 | `sharky/opportunity_detector.py` | Radar de asimetrías con confirmación cuantitativa. |
+| `sharky/market_explorer.py` | Búsqueda activa de oportunidades **nuevas** en la web, con el modelo más capaz. |
+| `sharky/thesis_review.py` | Revisión mensual de las tesis con novedades. Añade, nunca sobrescribe. |
 | `sharky/firm_departments.py` | Las cuatro mesas. |
 | `sharky/firm_committee.py` | Comité y resolución del CIO. |
 | `sharky/claude_client.py` | Cliente de la API de Claude, con fallback declarado. |
@@ -123,6 +125,7 @@ vault/
 ├── 07_Plantillas/                     # Plantillas
 ├── 08_Rebalanceos_Mensuales/          # Propuestas del Día 1
 └── 09_Alertas_Oportunidades/          # Oportunidades asimétricas
+    └── Exploraciones/                 #   Búsquedas de ideas nuevas, con su veredicto
 ```
 
 `Estado_Vital.md` no sólo lista los incumplimientos del mandato vigentes:
@@ -171,6 +174,17 @@ python -m sharky.cli niveles
 
 # Alertas de oportunidad activas
 python -m sharky.cli alerts
+
+# Revisión de las tesis activas que tienen algo que decir este mes. Apila
+# una sección fechada sobre cada una sin borrar lo anterior y sin tocar un
+# solo nivel. El estudio mensual la lanza sola al terminar
+python -m sharky.cli revisar-tesis
+
+# Exploración de mercado: busca en la web oportunidades asimétricas NUEVAS,
+# fuera de la cartera y del universo de vigilancia, con el modelo más capaz
+# de Claude. Cada candidato pasa después por el mismo filtro cuantitativo
+# que el resto (sin ANTHROPIC_API_KEY no se ejecuta)
+python -m sharky.cli explorar
 
 # Termómetro macroeconómico (SPY, QQQ, TLT, GLD, USO)
 python -m sharky.cli macro
@@ -466,6 +480,176 @@ El escaneo semanal de noticias (`sharky noticias`) usa `CLAUDE_MODEL` por
 defecto; se puede fijar aparte con `SHARKY_NEWS_MODEL`, y el día de la
 semana con `SHARKY_NEWS_SCAN_WEEKDAY` (0=lunes ... 6=domingo). Igual que el
 resto de la inteligencia de Sharky, sin `ANTHROPIC_API_KEY` no se ejecuta.
+
+### El ciclo de vida de una tesis
+
+Una tesis **nace** de una alerta ejecutada y **muere** en la venta que cierra
+la posición. Hasta 2026-09 no hacía ninguna de las dos cosas sola, y las tres
+omisiones tenían consecuencias silenciosas:
+
+| Antes | Consecuencia |
+| :--- | :--- |
+| Comprar desde una alerta no creaba tesis | La posición recién abierta no tenía ningún stop que `level_watch` vigilara, aunque la alerta ya traía uno calculado con precios reales |
+| Vender no cerraba la tesis | Una tesis activa **sin posición** es justo la condición que la vuelve candidata de COMPRA: vender por stop dejaba al motor proponiendo **recomprarla** el Día 1 siguiente |
+| Ninguna alerta caducaba | Su ticker quedaba vetado para siempre en `has_active_alert`, y sus niveles congelados entraban cada mes en el rebalanceo mientras el motor tomaba precio fresco |
+
+Ahora `TradeRecorder` cierra las dos puntas, en el mismo bloque post-asiento
+que el resto de escrituras: si algo de esto falla, la operación **no se
+deshace** (no se puede revertir una compra que ya ocurrió en el broker), sólo
+se avisa de qué escritura quedó pendiente.
+
+**Al comprar**, si hay una alerta activa para ese ticker: se abre la tesis con
+los niveles de la **orden realmente ejecutada** (no los de la alerta: si
+compraste a otro precio, manda lo que hiciste) y la alerta pasa a `EJECUTADA`.
+Una tesis que ya existía escrita a mano no se sobrescribe — es convicción
+propia.
+
+**Al vender toda la posición**, la tesis se archiva en `02_Tesis_Cerradas/`
+con `estado: Cerrada`, el PnL realizado y el motivo, que se deduce del
+contexto: si hoy saltó un stop-loss de esa posición, lo dice. Una venta
+**parcial** no cierra nada: reducir tamaño no invalida la convicción.
+
+Aquí sí se cambia `estado`, a diferencia de la revisión mensual: cerrar una
+tesis no es un juicio de un modelo sino un hecho contable. La prosa, en
+cambio, sigue la misma regla — se apila una sección de cierre y no se borra
+nada, porque el racional original es el material del post-mortem.
+
+**Las alertas caducan** en el ciclo diario, por tres criterios deterministas
+que dicen lo mismo desde ángulos distintos — la asimetría ya no está ahí:
+
+* **Edad** superior a `SHARKY_ALERTA_VIGENCIA_DIAS` (30 por defecto).
+* **Stop roto**: el precio cayó por debajo del stop que la propia alerta
+  declaró, *antes* siquiera de entrar.
+* **Objetivo alcanzado**: el precio llegó al target sin ti.
+
+Los dos criterios de precio sólo se aplican con cotización fiable y en la
+misma divisa que declaró la alerta: comparar un stop en EUR contra un precio
+en USD es el error de unidades que `level_watch` ya evita en las tesis. La
+caducidad corre **antes** del escaneo del radar, para que un ticker que
+caduca hoy pueda volver a emitirse en el mismo ciclo con niveles medidos hoy.
+
+---
+
+### La revisión de tesis
+
+Una tesis no es un documento que se escribe y se archiva: su frontmatter mueve
+maquinaria viva. `level_watch` compara cada día el precio real contra
+`stop_loss`, y el motor de rebalanceo ordena sus candidatos de compra por
+`conviccion`. Si nadie vuelve a mirarla, la cartera acaba operando con cifras
+que reflejan lo que pensabas hace meses.
+
+Hasta 2026-09 eso pasaba: el estudio mensual dictaba MANTENER / REDUCIR /
+CERRAR posición a posición, pero ese veredicto moría en la nota del estudio.
+Ahora vuelve al fichero de cada tesis.
+
+```bash
+python -m sharky.cli revisar-tesis
+```
+
+En la app es la acción **«Revisar tesis»**. El estudio mensual la lanza sola
+al terminar, así que en la práctica no hace falta acordarse.
+
+**Se revisa lo que tiene algo que decir**, no las 22 tesis cada mes. La
+selección es determinista y no gasta API:
+
+| Señal | Qué detecta |
+| :--- | :--- |
+| Movimiento del mes ≥ 15% | La deriva lenta que ningún aviso diario marca |
+| Nivel alcanzado | Stop o target tocados |
+| Incumplimiento abierto | La posición excede un límite del mandato |
+| Noticias del mes | El activo tuvo sección propia en algún escaneo semanal |
+| **Red de seguridad** | 3 meses sin que nadie la mire, aunque no se haya movido |
+
+Generar prosa sobre una posición donde no pasó nada es justamente donde nace
+la deriva narrativa; la red de seguridad evita el problema contrario, que una
+tesis tranquila quede olvidada para siempre. Se cuenta desde `fecha_revision`
+o, si nunca se revisó, desde `fecha_apertura`: una tesis escrita ayer no
+necesita revisión hoy.
+
+**Dos invariantes que el código sostiene, no sólo el prompt:**
+
+**1. Añade, nunca sobrescribe.** Cada revisión apila una sección fechada:
+
+```markdown
+## 🔄 Revisión 2026-10-01 — 🟡 REDUCIR
+
+> Seleccionada para revisión porque: nivel alcanzado, noticias del mes.
+
+**Qué ha cambiado:** …
+**Qué sigue en pie:** …
+**Qué la invalidaría ahora:** …
+```
+
+La nota crece hacia abajo y se lee como una cronología. Es deliberado: la
+única pregunta que enseña algo es *¿tenía razón mi tesis de agosto?*, y no se
+puede responder si la tesis de agosto ya no existe. Una nota reescrita cada
+mes acaba explicando lo que el precio ya hizo, que es peor que una tesis
+obsoleta porque *parece* vigente.
+
+**2. No toca un solo número.** `stop_loss`, `target_precio`, `conviccion`,
+`precio_entrada`, `estado` y el resto de `VaultManager.CAMPOS_INTOCABLES` son
+inmutables desde aquí. Sólo se escriben dos campos nuevos, `fecha_revision` y
+`veredicto_revision`, y el frontmatter se edita como texto -- no reserializando
+el YAML -- para que las líneas que la revisión no escribe queden byte a byte
+idénticas. Si la revisión cree que un nivel debería moverse, lo escribe como
+propuesta marcada `NO aplicada` y la aplicas tú.
+
+El motivo es concreto: el stop-loss es la única salida obligatoria del
+mandato. Si pudiera renegociarse cada mes, una posición que se acerca a su
+stop recibiría uno un poco más bajo con una justificación impecable -- "la
+tesis sigue intacta" -- y así es como una posición perdedora sobrevive a su
+propia invalidación. Mismo reparto que ya aceptas en el take-profit: Sharky
+propone, tú decides.
+
+Lo que la revisión **no** hace es cerrar tesis. Un `CERRAR` sigue siendo una
+propuesta: la tesis se archiva cuando vendes o cuando aceptas el veredicto.
+Que un modelo archive tu convicción sin que hayas tocado la posición deja la
+cartera operando con una tesis que ya nadie sostiene.
+
+---
+
+### El explorador de mercado
+
+El radar tiene dos piezas con responsabilidades distintas, y conviene no
+confundirlas:
+
+| | Detector (`opportunity_detector.py`) | Explorador (`market_explorer.py`) |
+| :--- | :--- | :--- |
+| **Qué hace** | Confirma o descarta con datos reales | Busca ideas que nadie había escrito |
+| **Universo** | `UNIVERSO_CONVICCION`, una lista a mano | El mercado, vía búsqueda web |
+| **Cuándo** | En cada control diario y cada vigilancia | Sólo cuando tú lo pides |
+| **Coste** | Gratis (determinista, sin API) | ~1–2,50 $ por exploración |
+
+El detector nunca puede encontrar un nombre que no esté ya en su lista: sólo
+sabe decir si el precio de un candidato conocido ofrece asimetría hoy. El
+explorador es lo que amplía esa lista.
+
+```bash
+python -m sharky.cli explorar
+```
+
+En la app es el botón **«Buscar oportunidades»** de la tarjeta *Oportunidades
+en radar*.
+
+Usa `SHARKY_EXPLORER_MODEL` (Claude Opus 5 por defecto, el modelo más capaz;
+**no** hereda `CLAUDE_MODEL`) porque redactar una tesis de inversión desde
+cero es el razonamiento más exigente de toda la cadencia. El resto de topes
+--presupuesto, búsquedas y número de candidatos-- están en `.env.example`.
+
+**La frontera entre convicción y confirmación no se mueve.** Claude aporta
+exactamente lo mismo que aporta `UNIVERSO_CONVICCION`: qué vigilar y por qué
+hay foso económico. El prompt le prohíbe proponer precios, stops u objetivos,
+y el modelo de datos del candidato ni siquiera tiene dónde guardarlos: esos
+números los calcula después el mismo filtro de siempre, con la estructura real
+de precios. Un nivel inventado por un modelo tiene el mismo aspecto que uno
+medido y ninguna de sus garantías.
+
+La consecuencia es deliberada: **una exploración puede terminar con ocho
+candidatos interesantes y cero alertas.** No es un fallo, es el filtro
+haciendo su trabajo -- la empresa puede ser excelente y su precio no ofrecer
+asimetría hoy. El informe (`09_Alertas_Oportunidades/Exploraciones/`) guarda
+el veredicto de cada candidato y su motivo, para poder volver sobre las ideas
+cuando el precio acompañe.
 
 Sharky no tiene modo simulación: toda operación registrada con `sharky trade`
 es una compra o venta real que ya ejecutaste en Trade Republic, y se asienta

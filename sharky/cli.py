@@ -290,6 +290,11 @@ def cmd_cycle(agent: SharkyAgent) -> None:
             )
     else:
         print("\n🔍 RADAR: ningún candidato cualifica hoy.")
+
+    if res.get("alertas_caducadas"):
+        print(f"\n⚪ ALERTAS CADUCADAS ({len(res['alertas_caducadas'])}):")
+        for c in res["alertas_caducadas"]:
+            print(f"   · [{c['ticker']}] {c['motivo']}")
         for t in res["diagnostico_radar"]:
             print(f"   {t['ticker']:<8} [{t['veredicto']}] {t['detalle']}")
 
@@ -351,6 +356,8 @@ def cmd_monthly(agent: SharkyAgent) -> None:
         print(f"[Sharky] ✅ Estudio de {res['mes']} completado ({res['modelo']}).")
     print(f"  Estudio            : {res['estudio_guardado']}")
     _imprimir_plan(res)
+
+    _revision_tesis(res.get("revision_tesis") or {})
 
 
 def cmd_rebalance(agent: SharkyAgent) -> None:
@@ -437,6 +444,125 @@ def cmd_news(agent: SharkyAgent) -> None:
     print(f"  Nota guardada      : {res['nota_guardada']}\n")
 
 
+def _revision_tesis(res: dict, sangria: str = "  ") -> None:
+    """Resumen de una revisión de tesis, compartido por `monthly` y `revisar`."""
+    if not res:
+        return
+    if not res.get("disponible"):
+        print(f"{sangria}⚠️  Revisión de tesis no disponible: {res.get('error')}")
+        return
+
+    revisadas = res.get("revisadas") or []
+    seleccionadas = res.get("seleccionadas") or []
+    if not seleccionadas:
+        print(f"{sangria}📘 Ninguna tesis necesitaba revisión este mes.")
+        return
+
+    print(f"\n{sangria}📘 TESIS REVISADAS ({len(revisadas)} de {res.get('tesis_activas', 0)} activas):")
+    iconos = {"MANTENER": "🟢", "AMPLIAR": "🔵", "REDUCIR": "🟡", "CERRAR": "🔴"}
+    motivos = {s["ticker"]: s["motivos"] for s in seleccionadas}
+    for r in revisadas:
+        print(f"{sangria}  {iconos.get(r['veredicto'], '·')} {r['ticker']:<18} {r['veredicto']}")
+        print(f"{sangria}     porque: {', '.join(motivos.get(r['ticker'], [])) or 'sin motivo registrado'}")
+        if r.get("propuesta_niveles"):
+            print(f"{sangria}     ⚠️  Propone (NO aplicado): {r['propuesta_niveles']}")
+
+    if res.get("aviso_parseo"):
+        print(f"{sangria}  ⚠️  {res['aviso_parseo']}")
+
+    omitidas = res.get("omitidas") or []
+    if omitidas:
+        print(f"{sangria}  (Sin revisar, sin novedades este mes: "
+              f"{', '.join(o['ticker'] for o in omitidas)})")
+
+
+def cmd_revisar_tesis(agent: SharkyAgent) -> None:
+    """Revisión de las tesis activas que tienen algo que decir.
+
+    No reescribe nada: apila una sección fechada sobre cada tesis revisada y
+    deja los niveles intactos. Una propuesta de cambiar un stop se escribe
+    como propuesta y la aplicas tú.
+    """
+    print("\n[Sharky] 📘 Revisando las tesis activas...")
+    res = agent.run_thesis_review()
+
+    if not res["disponible"] and not res["seleccionadas"]:
+        print("[Sharky] ℹ️  Ninguna tesis necesitaba revisión este mes.\n")
+        _seleccion_omitida(res)
+        return
+    if not res["disponible"]:
+        print(f"[Sharky] ⚠️  Revisión no disponible: {res['error']}")
+        print("           Configura ANTHROPIC_API_KEY en `.env` para que se ejecute de verdad.\n")
+        return
+
+    print(f"[Sharky] ✅ Revisión completada ({res['modelo']}).")
+    _revision_tesis(res, sangria="")
+    if res.get("sintesis"):
+        print(f"\n{res['sintesis'].strip()}")
+    print()
+
+
+def _seleccion_omitida(res: dict) -> None:
+    omitidas = res.get("omitidas") or []
+    if not omitidas:
+        return
+    print("  Sin novedades este mes:")
+    for o in omitidas:
+        print(f"    · {o['ticker']:<18} {o['motivo']}")
+    print()
+
+
+def cmd_explorar(agent: SharkyAgent) -> None:
+    """Exploración de mercado: busca oportunidades asimétricas nuevas.
+
+    Como `news`, no hay resultado determinista sin API: sin
+    `ANTHROPIC_API_KEY` en vivo no se busca nada y se dice, en vez de fingir
+    una idea que nadie tuvo.
+    """
+    print("\n[Sharky] 🔭 Explorando el mercado en busca de asimetrías nuevas...")
+    print("           (búsqueda web con el modelo más capaz: puede tardar varios minutos)")
+    res = agent.run_market_exploration()
+
+    if not res["disponible"]:
+        print(f"[Sharky] ⚠️  Exploración no disponible: {res['error']}")
+        print("           Configura ANTHROPIC_API_KEY en `.env` para que se ejecute de verdad.\n")
+        return
+
+    print(f"[Sharky] ✅ Exploración completada ({res['modelo']}).\n")
+    print(f"  Candidatos propuestos : {len(res['candidatos'])}")
+    print(f"  Búsquedas web         : {res['busquedas_realizadas']}")
+    print(f"  Fuentes citadas       : {res['num_fuentes']}")
+    print(f"  Activos ya cubiertos  : {len(res['excluidos'])} (excluidos de la búsqueda)")
+    print(f"  Informe guardado      : {res['informe_guardado']}")
+
+    if res["aviso_parseo"]:
+        print(f"\n⚠️  No se pudo leer la lista de candidatos: {res['aviso_parseo']}")
+        print("    El informe está guardado, pero no se ha evaluado ningún candidato.\n")
+        return
+
+    if res["candidatos"]:
+        print("\n🔎 CANDIDATOS PROPUESTOS:")
+        for c in res["candidatos"]:
+            print(f"   · [{c['ticker']}] {c['empresa']} | conv. {c['conviccion']}/10 | {c['sector'] or 'sin sector'}")
+
+    if res["alertas_nuevas"]:
+        print("\n🚨 CONFIRMADOS POR DATOS (alertas nuevas):")
+        for a in res["alertas_nuevas"]:
+            print(
+                f"   ⭐ [{a['ticker']}] {a['empresa']} | conv. {a['conviccion']}/10 | "
+                f"R:R {a['ratio_rr']:.2f}:1 | stop {a['stop_loss']:,.2f} {a['divisa']}"
+            )
+    elif res["candidatos"]:
+        print("\n⚪ Ningún candidato superó el filtro cuantitativo: sin alertas nuevas.")
+        print("   Las ideas quedan registradas en el informe para volver a mirarlas.")
+
+    if res["diagnostico_radar"]:
+        print("\n📋 Veredicto por candidato:")
+        for d in res["diagnostico_radar"]:
+            print(f"   {d['ticker']:<8} {d['veredicto']:<14} {d['detalle']}")
+    print()
+
+
 def cmd_trade(agent: SharkyAgent, args) -> None:
     """Registra una operación ya ejecutada en el broker."""
     recorder = TradeRecorder(
@@ -482,6 +608,13 @@ def cmd_trade(agent: SharkyAgent, args) -> None:
         if resultado.pnl_realizado_eur is not None:
             print(f"   PnL realizado      : {resultado.pnl_realizado_eur:+,.2f} €")
         print(f"   Nota               : {resultado.nota_operacion}")
+        if resultado.tesis_abierta:
+            print(f"   🎯 Tesis abierta   : {resultado.tesis_abierta}")
+            print("      (la posición ya tiene stop vigilado por `sharky niveles`)")
+        if resultado.tesis_cerrada:
+            print(f"   📁 Tesis archivada : {resultado.tesis_cerrada}")
+        if resultado.alerta_actualizada:
+            print(f"   ✅ Alerta ejecutada: {resultado.alerta_actualizada}")
     else:
         print("⛔ OPERACIÓN RECHAZADA POR EL RISKGOVERNOR")
         print(f"   {resultado.motivo}")
@@ -552,6 +685,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub.add_parser("levels", help="Alias de niveles")
     sub.add_parser("alerts", help="Alertas de oportunidad activas")
+    for nombre in ("revisar-tesis", "review"):
+        sub.add_parser(
+            nombre,
+            help="Revisa las tesis activas con novedades (añade, nunca sobrescribe)",
+        )
+    for nombre in ("explorar", "explore"):
+        sub.add_parser(
+            nombre,
+            help="Busca oportunidades asimétricas nuevas en el mercado (web + Claude)",
+        )
     sub.add_parser("monthly", help="Estudio mensual: rebalanceo del Día 1 + reevaluación de posiciones con Claude")
     sub.add_parser("rebalance", help="Sólo el plan de rebalanceo del Día 1, sin Claude")
     sub.add_parser("macro", help="Termómetro macroeconómico (SPY, QQQ, TLT, GLD, USO)")
@@ -646,6 +789,10 @@ def main() -> int:
         "niveles": lambda: cmd_niveles(agent),
         "levels": lambda: cmd_niveles(agent),
         "alerts": lambda: cmd_alerts(agent),
+        "revisar-tesis": lambda: cmd_revisar_tesis(agent),
+        "review": lambda: cmd_revisar_tesis(agent),
+        "explorar": lambda: cmd_explorar(agent),
+        "explore": lambda: cmd_explorar(agent),
         "monthly": lambda: cmd_monthly(agent),
         "rebalance": lambda: cmd_rebalance(agent),
         "macro": lambda: cmd_macro(agent),

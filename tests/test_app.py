@@ -131,7 +131,9 @@ class TestTrabajos:
     def test_las_acciones_que_usan_claude_declaran_su_coste(self):
         for accion in ACCIONES.values():
             assert accion.coste
-            assert accion.usa_claude == (accion.clave in {"diario", "noticias", "estudio", "comite"})
+            assert accion.usa_claude == (
+                accion.clave in {"diario", "noticias", "estudio", "comite", "explorar", "revisar"}
+            )
 
 
 # ======================================================================

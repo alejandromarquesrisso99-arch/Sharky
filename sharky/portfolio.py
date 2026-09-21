@@ -88,7 +88,11 @@ class PortfolioStore:
         for p in sorted(portfolio.posiciones, key=lambda x: x.coste_total_eur, reverse=True):
             cotiza = p.ticker_cotizacion or "*sin cotización*"
             nota = _wikilink(p)
-            enlace = f"[[{nota}|{p.ticker}]]" if nota != p.ticker else f"[[{p.ticker}]]"
+            # El `|` del alias de Obsidian es el mismo carácter que separa
+            # columnas en Markdown: sin escapar, `[[Rheinmetall|RHM]]` parte la
+            # celda en dos y desplaza el resto de la fila una columna a la
+            # derecha. Mismo criterio que `VaultManager.enlace`.
+            enlace = f"[[{nota}\\|{p.ticker}]]" if nota != p.ticker else f"[[{p.ticker}]]"
             filas.append(
                 f"| {enlace} | {p.nombre} | {p.clase.value} | `{cotiza}` | "
                 f"{p.divisa_cotizacion} | {p.unidades:,.6f} | {p.coste_unitario_eur:,.2f} € | "

@@ -19,6 +19,7 @@ from sharky.firm_departments import (
 )
 from sharky.models import (
     HealthStatus,
+    InvestmentThesis,
     MarketSnapshot,
     PortfolioValuation,
     RiskBreach,
@@ -40,13 +41,23 @@ class InvestmentCommittee:
         macro_snapshots: Dict[str, MarketSnapshot],
         valuation: Optional[PortfolioValuation] = None,
         incumplimientos: Optional[List[RiskBreach]] = None,
-        theses_count: int = 0,
+        theses: Optional[List[InvestmentThesis]] = None,
         noticias_recientes: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """`noticias_recientes` es el resultado de
+        """Convoca a las cuatro mesas y eleva su dossier al CIO.
+
+        `noticias_recientes` es el resultado de
         `VaultManager.leer_ultimas_noticias_semanales`: se añade al dossier
         para que el veredicto del CIO tenga en cuenta lo que ha pasado esta
-        semana en cada activo, no sólo precios y reglas de riesgo."""
+        semana en cada activo, no sólo precios y reglas de riesgo.
+
+        `theses` son las tesis activas completas. Hasta 2026-09 esta firma
+        recibía `theses_count: int` -- un número -- así que el comité
+        deliberaba sobre la cartera sin ver ni un ticker de la convicción que
+        la sostiene, y el CIO no podía contrastar su veredicto con lo que la
+        casa había escrito al abrir cada posición.
+        """
+        theses = theses or []
         informes = [
             self.macro_desk.generate_report(macro_snapshots),
             self.fundamental_desk.evaluate_equity_universe(market_snapshots),
@@ -55,6 +66,7 @@ class InvestmentCommittee:
         ]
 
         dossier = self._construir_dossier(informes)
+        dossier += "\n\n### 🎯 Tesis Activas de la Firma\n" + self._bloque_tesis(theses)
         dossier += (
             "\n\n### 📰 Noticias Recientes de la Cartera\n"
             + ClaudeBrainClient._formatear_noticias(noticias_recientes)
@@ -68,8 +80,26 @@ class InvestmentCommittee:
             "veredicto_cio": veredicto.texto,
             "veredicto_simulado": veredicto.simulado,
             "modelo": veredicto.modelo,
-            "tesis_activas": theses_count,
+            "tesis_activas": len(theses),
         }
+
+    @staticmethod
+    def _bloque_tesis(theses: List[InvestmentThesis]) -> str:
+        """Una línea por tesis: niveles, convicción y desde cuándo está viva.
+
+        El racional completo no entra -- el dossier del comité es corto a
+        propósito, y para releer tesis enteras está la revisión mensual
+        (`sharky.thesis_review`). Lo que el CIO necesita aquí es saber qué
+        convicción sostiene cada posición y con qué niveles.
+        """
+        if not theses:
+            return "- Sin tesis activas registradas."
+        return "\n".join(
+            f"- {t.ticker} ({t.empresa}): convicción {t.conviccion}/10, entrada "
+            f"{t.precio_entrada:,.2f} {t.divisa}, stop {t.stop_loss:,.2f}, target "
+            f"{t.target_precio:,.2f}, abierta el {t.fecha_apertura}"
+            for t in sorted(theses, key=lambda x: -x.conviccion)
+        )
 
     @staticmethod
     def _construir_dossier(informes: List[DepartmentReport]) -> str:

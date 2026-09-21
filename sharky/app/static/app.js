@@ -319,7 +319,44 @@ function htmlPanel(p) {
       <div class="tarjeta-cab"><h2>Exposición sectorial</h2><span class="tenue">Límite ${pct(l.max_sector_pct, false, 0)} por sector</span></div>
       ${barrasSectores(c.sectores, l.max_sector_pct)}
     </div>
-    <div class="tarjeta">
+    ${tarjetaRadar(p)}
+  </section>`;
+}
+
+// El radar tiene dos mitades y la tarjeta enseña las dos: las alertas vivas
+// (lo que el filtro cuantitativo ya confirmó) y el botón para salir a buscar
+// ideas nuevas. Sin la segunda, una lista vacía no distingue "hoy no cualifica
+// nada" de "nadie ha buscado nunca".
+// Qué le ha pasado a la convicción al registrar la operación: una compra
+// desde una alerta abre tesis y consume la alerta; una venta que deja la
+// posición a cero la archiva. Sin enseñarlo, registrar una venta parecía
+// dejar viva una tesis que ya no tiene posición detrás.
+function cicloDeVida(r) {
+  const filas = [
+    r.tesis_abierta && ["🎯", "Tesis abierta", r.tesis_abierta,
+      "La posición ya tiene un stop vigilado."],
+    r.tesis_cerrada && ["📁", "Tesis archivada", r.tesis_cerrada,
+      "Movida a 02_Tesis_Cerradas: el motor ya no la propondrá como compra."],
+    r.alerta_actualizada && ["✅", "Alerta ejecutada", r.alerta_actualizada,
+      "Sale del radar activo y su ticker vuelve a quedar libre."],
+  ].filter(Boolean);
+  if (!filas.length) return "";
+  return `<div class="ciclo-vida">${filas.map(([ico, titulo, archivo, nota]) => `
+    <div class="item-atencion"><span class="emoji">${ico}</span>
+      <div><strong>${esc(titulo)}</strong>
+        <div class="sub">${esc(nota)}</div>
+        <button class="btn pequeno" data-nota="${esc(nombreArchivo(archivo))}">Ver nota</button>
+      </div></div>`).join("")}</div>`;
+}
+
+function tarjetaRadar(p) {
+  const e = p.exploracion;
+  const accion = estado.acciones.find((a) => a.clave === "explorar");
+  const resumen = e
+    ? `Última exploración ${esc(fecha(e.fecha))} · ${e.candidatos} candidato(s), ${e.alertas} alerta(s)`
+    : "El mercado nunca se ha explorado desde aquí.";
+  return `
+    <div class="tarjeta radar">
       <div class="tarjeta-cab"><h2>Oportunidades en radar</h2><span class="tenue">${p.oportunidades.length} activa(s)</span></div>
       ${p.oportunidades.length ? `<div class="oportunidades">${p.oportunidades.map((o) => `
         <div class="oportunidad">
@@ -327,8 +364,14 @@ function htmlPanel(p) {
           <div class="datos num">Convicción ${o.conviccion}/10 · R:R ${NF2.format(o.ratio_rr)}<br><span class="pos">+${NF1.format(o.potencial_pct)} %</span> · stop ${precio(o.stop)} ${esc(o.divisa)}</div>
         </div>`).join("")}</div>`
       : `<div class="vacio">Ningún candidato cualifica ahora mismo.</div>`}
-    </div>
-  </section>`;
+      <div class="pie">
+        <span class="coste">${resumen}${accion ? ` · ${esc(accion.coste)}` : ""}</span>
+        <span>
+          ${e ? `<button class="btn pequeno" data-nota-id="${esc(e.id)}">Ver informe</button>` : ""}
+          <button class="btn pequeno primario" data-lanzar="explorar">${ico("objetivo")}Buscar oportunidades</button>
+        </span>
+      </div>
+    </div>`;
 }
 
 function kpi(etiqueta, valor, detalle = "", claseValor = "") {
@@ -505,6 +548,9 @@ const PREFIJOS_TIPO = [
   ["diario", /^05_Diario_Reflexion\//],
   ["operaciones", /^04_Operaciones_Bitacora\//],
   ["tesis", /^01_Tesis_Activas\//],
+  // Antes que el prefijo general de la carpeta: una exploracion vive dentro
+  // de 09_Alertas_Oportunidades pero tiene pestana propia.
+  ["exploraciones", /^09_Alertas_Oportunidades\/Exploraciones\//],
   ["alertas", /^09_Alertas_Oportunidades\//],
 ];
 const tipoDeNota = (id) => (PREFIJOS_TIPO.find(([, re]) => re.test(id)) || [null])[0];
@@ -693,6 +739,7 @@ async function enviarOperacion(form) {
       ? `<div class="tarjeta"><div class="resultado ok"><h3>Operación registrada</h3><p>${esc(r.motivo)}</p>
           <dl class="lista-datos"><dt>NAV posterior</dt><dd class="num">${eur(r.nav_posterior)}</dd><dt>Efectivo posterior</dt><dd class="num">${eur(r.efectivo_posterior)}</dd>
           ${r.pnl_realizado != null ? `<dt>PnL realizado</dt><dd class="num ${tono(r.pnl_realizado)}">${eurSigno(r.pnl_realizado)}</dd>` : ""}</dl>
+          ${cicloDeVida(r)}
           ${r.nota ? `<p><button class="btn pequeno" data-nota="${esc(nombreArchivo(r.nota))}">Ver nota de la operación</button></p>` : ""}</div></div>`
       : `<div class="tarjeta"><div class="resultado mal"><h3>Rechazada por el RiskGovernor</h3><p>${esc(r.motivo)}</p><p class="tenue">El libro de posiciones no se ha modificado.</p></div></div>`;
     if (r.aprobada) {
@@ -721,7 +768,7 @@ async function vistaSistema() {
   <div class="rejilla dos">
     <div class="tarjeta">
       <div class="tarjeta-cab"><h2>Inteligencia artificial</h2>${sistema.api_conectada ? `<span class="chip ok">API conectada</span>` : `<span class="chip negativo">Sin API</span>`}</div>
-      <dl class="lista-datos"><dt>Modelo</dt><dd>${esc(sistema.modelo)}</dd><dt>Modelo de noticias</dt><dd>${esc(sistema.modelo_noticias)}</dd></dl>
+      <dl class="lista-datos"><dt>Modelo</dt><dd>${esc(sistema.modelo)}</dd><dt>Modelo de noticias</dt><dd>${esc(sistema.modelo_noticias)}</dd><dt>Modelo del explorador</dt><dd>${esc(sistema.modelo_explorador)}</dd><dt>Modelo de revisión</dt><dd>${esc(sistema.modelo_revision)}</dd></dl>
       <div class="tabla-envoltorio">
         <table class="tabla"><thead><tr><th>Nivel</th><th>Qué razona</th><th>Effort</th><th class="der">Máx. tokens</th></tr></thead>
         <tbody>${sistema.perfiles.map((f) => `<tr><td><strong>${esc(f.nivel)}</strong></td><td class="tenue">${esc(f.que)}</td><td>${esc(f.effort)}</td><td class="der num">${NF0.format(f.max_tokens)}</td></tr>`).join("")}</tbody></table>
@@ -769,9 +816,23 @@ async function cargarAcciones() {
 }
 
 async function lanzar(clave) {
-  if (!estado.acciones.length) await cargarAcciones();
-  const accion = estado.acciones.find((a) => a.clave === clave);
-  if (!accion) return;
+  let accion = estado.acciones.find((a) => a.clave === clave);
+  if (!accion) {
+    try {
+      await cargarAcciones();
+    } catch (e) {
+      aviso(e.message, true);
+      return;
+    }
+    accion = estado.acciones.find((a) => a.clave === clave);
+  }
+  if (!accion) {
+    // La página se sirve del disco en cada petición, pero las acciones viven
+    // en la memoria del servidor: uno arrancado antes de añadir una acción no
+    // la conoce. Mejor decirlo que no hacer nada.
+    aviso("El servidor en marcha es anterior a esta versión y no conoce esta acción. Reinicia la app: Sistema › Apagar la app y vuelve a abrirla.", true);
+    return;
+  }
   if (estado.trabajo?.estado === "en_curso") {
     aviso(`Espera a que termine «${estado.trabajo.titulo}».`, true);
     return;
@@ -781,6 +842,11 @@ async function lanzar(clave) {
   if (clave === "diario" && c?.diario.hecho_hoy) extra = "El control de hoy ya se hizo: repetirlo reescribe el diario de hoy y vuelve a llamar a Claude.";
   if (clave === "estudio" && c && !c.mensual.pendiente) extra = "Este mes ya tiene estudio: se volverá a generar y lo sustituirá.";
   if (clave === "noticias" && c && !c.semanal.pendiente) extra = "Esta semana no toca escaneo todavía; puedes lanzarlo igualmente.";
+  if (clave === "explorar") {
+    const e = estado.panel?.exploracion;
+    extra = "Busca en la web con el modelo más capaz de Claude: puede tardar varios minutos.";
+    if (e) extra += ` La última exploración fue el ${fecha(e.fecha)}.`;
+  }
   const ok = await confirmar({
     titulo: accion.titulo,
     cuerpo: accion.descripcion,
@@ -904,8 +970,17 @@ function confirmar({ titulo, cuerpo, coste = "", extra = "", aceptar = "Aceptar"
   </div>`;
   $$(".nota-coste svg", dialogo).forEach((s) => s.setAttribute("width", "16"));
   return new Promise((resolver) => {
-    const alCerrar = () => resolver(dialogo.returnValue === "si");
-    dialogo.addEventListener("close", alCerrar, { once: true });
+    // Se resuelve desde el propio botón además de desde `close`: hay builds de
+    // Chromium en los que `close` no llega y la promesa quedaría colgada.
+    let hecho = false;
+    const resolverUnaVez = (valor) => {
+      if (hecho) return;
+      hecho = true;
+      resolver(valor);
+    };
+    dialogo.addEventListener("close", () => resolverUnaVez(dialogo.returnValue === "si"), { once: true });
+    $$("[data-respuesta]", dialogo).forEach((b) =>
+      b.addEventListener("click", () => resolverUnaVez(b.dataset.respuesta === "si"), { once: true }));
     dialogo.returnValue = "";
     dialogo.showModal();
     $('[data-respuesta="si"]', dialogo).focus();

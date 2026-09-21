@@ -15,6 +15,11 @@ Cadencia de razonamiento (ver los perfiles en `config.py`):
   * Mensual (`generate_monthly_study`): estudio completo y reevaluación de
     posiciones con todo el contexto del mes.
 
+Fuera de esa cadencia, y sólo a demanda, el explorador de mercado
+(`sharky.market_explorer`) busca candidatos nuevos con el modelo más capaz
+disponible. No vive aquí porque no razona sobre la cartera: la usa como
+contexto para no volver a proponer lo que ya tienes.
+
 Cada informe termina con una sección de conclusión (`## Conclusión del día`,
 `de la semana`, `del mes`) que se guarda en el frontmatter de su nota y es
 lo único que el nivel siguiente relee: así el contexto de cada llamada queda
@@ -57,6 +62,11 @@ MAX_TOKENS_SIN_STREAMING = 20000
 CONCLUSION_DIA = "Conclusión del día"
 CONCLUSION_SEMANA = "Conclusión de la semana"
 CONCLUSION_MES = "Conclusión del mes"
+# El explorador de mercado (`sharky.market_explorer`) no pertenece a la
+# cadencia diaria/semanal/mensual -- se lanza a demanda -- pero cierra su
+# informe igual que los demás, para que la app pueda enseñar su conclusión
+# en la misma tarjeta que el resto.
+CONCLUSION_EXPLORACION = "Conclusión de la exploración"
 
 
 def extraer_conclusion(texto: str, titulo: str) -> str:
