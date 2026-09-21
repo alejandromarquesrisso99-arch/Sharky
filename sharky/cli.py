@@ -57,6 +57,14 @@ def _valor_enum(v) -> str:
     return str(getattr(v, "value", v))
 
 
+def _custodio() -> str:
+    """El bróker del libro, para los avisos; genérico si no se puede leer."""
+    try:
+        return PortfolioStore().load().custodio
+    except Exception:
+        return "tu bróker"
+
+
 def _niveles(res: dict) -> None:
     """Bloque de niveles alcanzados, lo primero que se imprime del ciclo.
 
@@ -86,7 +94,7 @@ def _niveles(res: dict) -> None:
     if stops:
         print(SUB)
         print("  ⛔ El mandato exige liquidar las posiciones con el stop cruzado.")
-        print("     Ejecuta en Trade Republic y regístralo: `sharky trade venta ...`")
+        print(f"     Ejecuta en {_custodio()} y regístralo: `sharky trade venta ...`")
     print(SEP)
 
 

@@ -241,7 +241,7 @@ python -m sharky.app
 | :--- | :--- |
 | **Panel** | Estado vital, NAV y drawdown, avisos que requieren atención (stops, incumplimientos, datos), evolución del NAV, los tres niveles de razonamiento con su última conclusión y un botón para lanzarlos, posiciones, exposición sectorial y oportunidades. |
 | **Informes** | Lector de todo lo que Sharky escribe en la bóveda (controles diarios, noticias, estudios, rebalanceos, operaciones, tesis, alertas), con los `[[enlaces]]` navegables. |
-| **Operar** | Registra una operación ya ejecutada en Trade Republic. Pasa por el RiskGovernor igual que `sharky trade`. |
+| **Operar** | Registra una operación ya ejecutada en tu bróker (el del libro de posiciones). Pasa por el RiskGovernor igual que `sharky trade`. |
 | **Sistema** | Perfiles de la IA, todas las acciones (con su coste estimado), historial y apagado. |
 
 - Las acciones largas (control diario, noticias, estudio mensual, comité)
@@ -752,7 +752,7 @@ Scripts de un solo uso, idempotentes, en `scripts/`:
 
 | Script | Para qué |
 | :--- | :--- |
-| `migrar_a_eur.py` | Limpia el estado heredado de la versión en USD: resiembra el máximo histórico del NAV y caduca las alertas del detector antiguo. |
+| `migrar_a_eur.py` | Limpia el estado heredado de la versión en USD: resiembra el máximo histórico del NAV y caduca las alertas del detector antiguo. El capital de referencia se pasa con `--capital-referencia`. |
 | `consolidar_vault.py` | Fusiona notas duplicadas del mismo activo y reapunta los wikilinks. Admite `--dry-run`. |
 | `reparar_enlaces_vault.py` | Crea las fichas y notas de sector que faltan y reapunta a su ficha los enlaces por ticker (`[[RHM]]` → `[[Rheinmetall\|RHM]]`) que dejaba el texto de Claude antes de que `VaultManager` los normalizara al escribir. Lo que no resuelve a nada queda como texto plano. |
 

@@ -213,3 +213,67 @@ class TestSeguridadServidor:
             servidor, "GET", "/api/nota?id=../.env", {"X-Sharky-Token": "token-de-prueba"}
         )
         assert respuesta.status == 403
+
+
+# ======================================================================
+# Panel: fecha del último control
+# ======================================================================
+def _agente_sin_red(tmp_path, custodio="Trade Republic Bank GmbH"):
+    """SharkyAgent con bóveda temporal y mercado de prueba: no toca la red."""
+    from sharky.agent_loop import SharkyAgent
+    from sharky.models import Portfolio, Position
+    from sharky.portfolio import PortfolioStore, PortfolioValuator
+    from sharky.risk_governor import RiskGovernor
+    from sharky.vault_manager import VaultManager
+
+    from conftest import FakeFx, FakeMarket
+
+    store = PortfolioStore(tmp_path)
+    store.save(Portfolio(custodio=custodio, efectivo_eur=1000.0, posiciones=[
+        Position(ticker="AAA", nombre="Alfa", ticker_cotizacion="AAA", divisa_cotizacion="EUR",
+                 unidades=10.0, coste_unitario_eur=100.0, sector="Tecnologia"),
+    ]))
+    market, fx = FakeMarket({"AAA": (110.0, "EUR")}), FakeFx()
+    agente = SharkyAgent.__new__(SharkyAgent)
+    agente.vault = VaultManager(tmp_path)
+    agente.market, agente.fx, agente.store = market, fx, store
+    agente.valuator = PortfolioValuator(market=market, fx=fx)
+    agente.risk = RiskGovernor()
+    return agente
+
+
+class TestPanelUltimoControl:
+    """El panel revalora la cartera en el momento, y ese estado recalculado
+    trae «ahora» como fecha del último control. Hasta 2026-09 el panel la
+    enseñaba: «Último control: <hora actual>» con el control del día
+    pendiente, o sin haberse hecho nunca ninguno."""
+
+    def test_sin_ningun_control_no_inventa_una_fecha(self, tmp_path):
+        panel = datos.construir_panel(_agente_sin_red(tmp_path))
+
+        assert panel["salud"]["ultimo_ciclo"] is None
+        assert panel["cadencia"]["diario"]["ultimo"] is None
+        assert panel["cadencia"]["diario"]["hecho_hoy"] is False
+
+    def test_ensena_la_fecha_guardada_del_ultimo_control(self, tmp_path):
+        from datetime import datetime, timedelta
+
+        agente = _agente_sin_red(tmp_path)
+        ayer = datetime.now() - timedelta(days=1)
+        agente.vault.health_path.write_text(
+            agente.vault.build_markdown({"ultimo_ciclo_diario": ayer.isoformat()}, "# x\n"),
+            encoding="utf-8",
+        )
+
+        panel = datos.construir_panel(agente)
+
+        assert panel["cadencia"]["diario"]["ultimo"] == ayer.isoformat(timespec="minutes")
+        assert panel["salud"]["ultimo_ciclo"] == ayer.isoformat(timespec="minutes")
+
+
+def test_el_panel_nombra_el_broker_del_libro(tmp_path):
+    """La pantalla Operar decía siempre «Trade Republic»: cada usuario
+    declara su bróker en `sharky init` y el panel lo lleva."""
+    panel = datos.construir_panel(_agente_sin_red(tmp_path, custodio="Mi Bróker S.A."))
+
+    assert panel["cartera"]["custodio"] == "Mi Bróker S.A."

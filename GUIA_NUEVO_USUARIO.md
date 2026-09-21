@@ -192,7 +192,8 @@ python -m sharky.app
 - `status` enseña tu estado de salud, el valor de la cartera y los avisos.
 - `portfolio` enseña cada posición valorada a mercado.
 - `daily` hace el control diario completo y le pide a Claude que lo razone.
-- `python -m sharky.app` abre la app, con todo lo anterior en ventanas.
+- `python -m sharky.app` abre la app, con todo lo anterior en ventanas
+  (ver «Cómo funciona la app», justo debajo).
 - Para leer las notas, abre la carpeta `vault` de Sharky como bóveda en
   Obsidian («Open folder as vault»).
 
@@ -210,8 +211,121 @@ entero. Los límites por defecto son:
 Si quieres otros, cámbialos en `.env` (`SHARKY_MAX_POS_PCT`,
 `SHARKY_MAX_SECTOR_PCT`, `SHARKY_MIN_CASH_PCT`...).
 
-La app muestra el coste estimado de cada acción que llama a Claude antes de
-lanzarla. Como referencia, una exploración de mercado cuesta de 1 a 2,50 $.
+---
+
+## Cómo funciona la app
+
+La app hace lo mismo que los comandos, pero con ventanas y botones. Ábrela
+con `python -m sharky.app` o con el acceso directo «Sharky» (ver Paso 7).
+Se abre en una ventana propia de Edge o Chrome y sólo funciona en tu
+ordenador: nadie más puede entrar en ella, ni siquiera otra web que tengas
+abierta en el navegador.
+
+A la izquierda, o abajo si la ventana es estrecha, están sus cuatro
+pantallas: **Panel**, **Informes**, **Operar** y **Sistema**. El número rojo
+junto a Panel cuenta los avisos graves. Junto al título de cada pantalla
+hay un botón para cambiar el tema: claro, oscuro o el del sistema.
+
+### Panel: cómo está tu cartera
+
+De arriba abajo:
+
+- **Estado vital:** Óptimo, Alerta o Cuidados Intensivos, tu patrimonio
+  total y una barra con cuánto ha caído desde su máximo, con las marcas del
+  3 % y el 8 % donde cambia de estado.
+- **Resumen:** ganancias sin realizar, efectivo frente a su objetivo, número
+  de posiciones (y cuántas tienen tesis), incumplimientos del mandato, qué
+  parte de la cartera tiene precio de mercado fiable y cuándo fue el último
+  control diario.
+- **Requiere atención:** lo que tienes que mirar. Stops alcanzados (salida
+  obligatoria), objetivos alcanzados, incumplimientos del mandato con la
+  corrección que propone Sharky y problemas con los datos. Si no hay nada,
+  pone «Todo en orden».
+- **Evolución del NAV:** un gráfico de tu patrimonio, que aparece a partir
+  del segundo control diario.
+- **Control diario, Noticias semanales y Estudio mensual:** una tarjeta por
+  cada razonamiento de Claude. Dicen si toca hacerlo («Pendiente», «Toca
+  hoy», «Hecho hoy»), enseñan su última conclusión y traen un botón para
+  lanzarlo y otro para leer el informe completo.
+- **Posiciones:** una tabla con la cotización, el valor, el peso, las
+  ganancias, cuánto se ha movido cada una desde el último control (resaltado
+  a partir del 7 %) y el stop y el objetivo de su tesis. Pulsa una cabecera
+  para ordenar por esa columna.
+- **Exposición sectorial:** el peso de cada sector frente al límite del 25 %.
+- **Oportunidades en radar:** las alertas de compra activas y el botón
+  «Buscar oportunidades», que lanza una exploración de mercado.
+
+«Actualizar precios», junto al título, vuelve a valorar la cartera con los
+precios del momento. Es gratis: no llama a Claude.
+
+### Informes: todo lo que ha escrito Sharky
+
+Un lector de las notas de la bóveda, para no tener que abrir Obsidian. Las
+pestañas separan controles diarios, noticias semanales, estudios mensuales,
+planes de rebalanceo, operaciones, tesis activas, alertas de oportunidad y
+exploraciones de mercado. Puedes filtrar por título o fecha, y los enlaces
+entre notas se pueden pulsar. Si un informe se hizo sin Claude, lo marca con
+«Generado sin Claude».
+
+### Operar: registrar una compra o venta
+
+Es lo mismo que `sharky trade`, en un formulario. Rellenas el sentido
+(compra o venta), el ticker (te sugiere los de tu cartera), las unidades, el
+precio al que se ejecutó, la comisión en euros y, en las compras, el stop y
+el objetivo. Aquí los decimales pueden ir con coma. Para una posición nueva,
+despliega «Posición nueva o datos adicionales» y añade su nombre, ISIN,
+símbolo, sector y clase.
+
+A la derecha ves tu posición actual en ese ticker (unidades, valor, peso,
+ganancias y el stop de su tesis) y los límites del mandato. «Revisar y
+registrar» te pide confirmación antes de escribir nada:
+
+- **Si la operación rompe una regla del mandato,** Sharky la rechaza, te
+  dice por qué y no toca tu libro. La casilla «Registrar aunque incumpla el
+  mandato» la registra igualmente, con el aviso.
+- **Si compras algo que estaba en el radar,** Sharky abre su tesis con el
+  stop y el objetivo que has puesto.
+- **Si vendes toda una posición,** archiva su tesis.
+
+La pantalla te enseña en cada caso qué ha cambiado, con un botón para abrir
+la nota.
+
+### Sistema: la IA, las acciones y el apagado
+
+Enseña si la clave de Claude está conectada, qué modelo usa cada tipo de
+razonamiento y el historial de lo que has lanzado desde que abriste la app.
+Desde aquí se lanza cualquier acción:
+
+| Acción | Qué hace | Coste aproximado |
+| :--- | :--- | ---: |
+| Comprobar niveles | Mira si algún precio ha cruzado su stop u objetivo | Gratis |
+| Control diario | Valoración, niveles, radar y el razonamiento del día | 0,02–0,05 $ |
+| Escaneo de noticias | Busca en la web noticias de cada posición | 0,70–1,10 $ |
+| Estudio mensual | Plan de rebalanceo y repaso de cada posición con todo el mes | 0,80–1,80 $ |
+| Plan de rebalanceo | Sólo el plan de ajustes del mes, sin Claude | Gratis |
+| Revisar tesis | Añade una revisión fechada a las tesis con novedades; nunca cambia un stop por su cuenta | 0,30–0,80 $ |
+| Explorar el mercado | Busca en la web ideas de inversión nuevas y las pasa por el filtro de Sharky | 1–2,50 $ |
+| Comité de inversión | Opinión de las cuatro mesas y resolución final sobre la cartera | 0,20 $ |
+
+Los costes se pagan en tu cuenta de Anthropic y son orientativos.
+
+### Cómo se lanza una acción
+
+1. Pulsas su botón y la app te explica qué hace y cuánto cuesta, y te avisa
+   si ya se hizo (por ejemplo, si el control de hoy ya está hecho).
+2. Si aceptas, corre en segundo plano: puedes seguir usando la app. Un
+   recuadro enseña cuánto lleva y lo que va haciendo.
+3. Al terminar, el recuadro resume el resultado, con un botón para abrir el
+   informe que ha escrito.
+
+Las acciones van de una en una: mientras una está en marcha, la app no deja
+lanzar otra.
+
+### Cerrar la app
+
+**Cerrar la ventana no apaga la app:** el servidor sigue funcionando en
+segundo plano. Para apagarla, ve a **Sistema** y pulsa «Apagar la app». Si
+abres el acceso directo con la app ya en marcha, sólo se abre otra ventana.
 
 ---
 

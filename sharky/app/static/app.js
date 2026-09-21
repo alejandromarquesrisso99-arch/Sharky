@@ -632,12 +632,14 @@ function pintarListaNotas(activa) {
 // Operar
 // ======================================================================
 async function vistaOperar() {
-  cabecera("Operar", "Registra una operación que ya has ejecutado en Trade Republic");
+  cabecera("Operar", "Registra una operación que ya has ejecutado en tu bróker");
   if (!estado.panel) {
     $("#vista").innerHTML = `<div class="esqueleto alto"></div>`;
     await cargarPanel();
   }
   const p = estado.panel;
+  // El bróker sale del libro de posiciones: cada usuario declara el suyo.
+  cabecera("Operar", `Registra una operación que ya has ejecutado en ${p.cartera.custodio || "tu bróker"}`);
   $("#vista").innerHTML = `
   <div class="rejilla dos">
     <form class="tarjeta" id="form-operacion" novalidate>

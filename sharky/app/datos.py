@@ -263,6 +263,11 @@ def construir_panel(agent) -> Dict[str, Any]:
     valuation, health, incumplimientos = agent.snapshot_estado()
     vault = agent.vault
     hoy = date.today()
+    # La fecha del último control sale de disco, no de `health`: esa es una
+    # revaloración de ahora mismo y su `ultimo_ciclo_diario` vale «ahora» por
+    # defecto. El panel decía «Último control: <hora actual>» aunque el control
+    # de hoy estuviera pendiente, o nunca se hubiera hecho ninguno.
+    ultimo_control = vault.read_health_status().ultimo_ciclo_diario
 
     tesis = agent.vault.list_active_theses()
     tesis_por_ticker = {t.ticker: (ruta, t) for ruta, t in tesis if t.ticker}
@@ -359,9 +364,12 @@ def construir_panel(agent) -> Dict[str, Any]:
             "pnl_ref_eur": health.pnl_total_eur,
             "pnl_ref_pct": health.pnl_total_pct,
             "cobertura_pct": health.cobertura_datos_pct,
-            "ultimo_ciclo": _iso(health.ultimo_ciclo_diario),
+            "ultimo_ciclo": _iso(ultimo_control),
         },
         "cartera": {
+            # El bróker del libro, no uno fijo: cada usuario declara el suyo en
+            # `sharky init` y la pantalla Operar lo nombra.
+            "custodio": agent.store.load().custodio,
             "nav": valuation.nav_eur,
             "efectivo": valuation.efectivo_eur,
             "efectivo_pct": valuation.peso_efectivo_pct,
@@ -409,7 +417,7 @@ def construir_panel(agent) -> Dict[str, Any]:
         "cadencia": {
             "diario": {
                 "hecho_hoy": agent.ya_completo_ciclo_hoy(),
-                "ultimo": _iso(health.ultimo_ciclo_diario),
+                "ultimo": _iso(ultimo_control),
                 "conclusion": str(
                     (ultima_diaria or {}).get("conclusion_ia")
                     or (ultima_diaria or {}).get("eventos_clave")

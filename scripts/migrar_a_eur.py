@@ -26,9 +26,14 @@ acumulados desde entonces, devolviendo la cartera a OPTIMO aunque haya
 habido un drawdown real después de la migración).
 
 Uso:
-    python scripts/migrar_a_eur.py
+    python scripts/migrar_a_eur.py --capital-referencia <patrimonio neto en EUR>
+
+El capital de referencia es el patrimonio neto del extracto del bróker en la
+fecha en que Sharky asume la gestión. Se pasa como argumento y no se escribe
+aquí: el repositorio es público y no puede llevar la cifra de nadie.
 """
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -42,10 +47,6 @@ from sharky.models import HealthStatus, VitalState  # noqa: E402
 from sharky.portfolio import PortfolioStore, PortfolioValuator  # noqa: E402
 from sharky.risk_governor import RiskGovernor  # noqa: E402
 from sharky.vault_manager import VaultManager  # noqa: E402
-
-# Cifra ficticia (el repositorio es público): patrimonio neto en el
-# momento en el que la firma asume la gestión de la cartera.
-CAPITAL_REFERENCIA_EUR = 8500.0
 
 
 def caducar_alertas_heredadas(vault: VaultManager) -> int:
@@ -76,6 +77,13 @@ def caducar_alertas_heredadas(vault: VaultManager) -> int:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Migración del estado heredado en USD a EUR.")
+    parser.add_argument(
+        "--capital-referencia", type=float, required=True, metavar="EUR",
+        help="Patrimonio neto del extracto del bróker cuando Sharky asume la gestión.",
+    )
+    capital_referencia = parser.parse_args().capital_referencia
+
     vault = VaultManager()
     store = PortfolioStore()
 
@@ -102,7 +110,7 @@ def main() -> int:
     # machacaría el high-water mark y el drawdown acumulados desde entonces
     # con los de este instante, ocultando un drawdown real posterior a la
     # migración. Ver la nota de idempotencia en el docstring del módulo.
-    if abs(anterior.capital_inicial_eur - CAPITAL_REFERENCIA_EUR) < 0.01:
+    if abs(anterior.capital_inicial_eur - capital_referencia) < 0.01:
         print(
             "   • Ya migrado (capital_inicial_eur coincide con la referencia): "
             "no se resiembra para no perder el historial de drawdown acumulado."
@@ -119,9 +127,9 @@ def main() -> int:
         estado_vital=VitalState.OPTIMO,
         salud_porcentaje=100.0,
         energia_actual=100.0,
-        capital_inicial_eur=CAPITAL_REFERENCIA_EUR,
+        capital_inicial_eur=capital_referencia,
         nav_actual_eur=valoracion.nav_eur,
-        nav_maximo_historico_eur=max(CAPITAL_REFERENCIA_EUR, valoracion.nav_eur),
+        nav_maximo_historico_eur=max(capital_referencia, valoracion.nav_eur),
         drawdown_actual_pct=0.0,
         drawdown_maximo_pct=0.0,
         operaciones_ganadoras=0,
@@ -140,7 +148,7 @@ def main() -> int:
           f"estado {health.estado_vital.value} | drawdown {health.drawdown_actual_pct:.2f}%")
 
     print("\n✅ Migración completada.")
-    print(f"   Capital de referencia : {CAPITAL_REFERENCIA_EUR:,.2f} €")
+    print(f"   Capital de referencia : {capital_referencia:,.2f} €")
     print(f"   NAV real medido       : {valoracion.nav_eur:,.2f} €")
     print(f"   Incumplimientos       : {len(incumplimientos)}")
     print(f"   Alertas caducadas     : {caducadas}")
