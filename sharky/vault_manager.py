@@ -106,6 +106,7 @@ class VaultManager:
     def __init__(self, vault_path: Path = VAULT_PATH):
         self.vault_path = Path(vault_path)
         self._mapa_notas_cache: Optional[Dict[str, str]] = None
+        self._tesis_ilegibles_avisadas: Set[str] = set()
         self._ensure_structure()
 
     # ------------------------------------------------------------------
@@ -882,8 +883,20 @@ class VaultManager:
         """
         theses: List[Tuple[Path, InvestmentThesis]] = []
         for file in sorted((self.vault_path / "01_Tesis_Activas").glob("*.md")):
-            meta, body = self.parse_markdown(file.read_text(encoding="utf-8"))
-            if not meta or str(meta.get("estado", "")).strip() != "Activa":
+            texto = file.read_text(encoding="utf-8")
+            meta, body = self.parse_markdown(texto)
+            if not isinstance(meta, dict) or not meta:
+                # Hasta 2026-09 esto se saltaba en silencio: una tesis copiada
+                # de la plantilla con algún `{{...}}` sin rellenar no es YAML
+                # válido, y su stop dejaba de vigilarse sin que nada lo dijera.
+                if texto.lstrip().startswith("---"):
+                    self._avisar_tesis_ilegible(
+                        file.name,
+                        "su frontmatter no se puede leer (¿queda algún `{{...}}` de "
+                        "la plantilla sin rellenar?)",
+                    )
+                continue
+            if str(meta.get("estado", "")).strip() != "Activa":
                 continue
             try:
                 theses.append((
@@ -906,8 +919,18 @@ class VaultManager:
                     ),
                 ))
             except (TypeError, ValueError) as exc:
-                print(f"[VaultManager] Tesis ilegible {file.name}: {exc}")
+                self._avisar_tesis_ilegible(file.name, str(exc))
         return theses
+
+    def _avisar_tesis_ilegible(self, nombre: str, motivo: str) -> None:
+        """Una vez por tesis: cada comando relee las tesis varias veces."""
+        if nombre in self._tesis_ilegibles_avisadas:
+            return
+        self._tesis_ilegibles_avisadas.add(nombre)
+        print(
+            f"[VaultManager] ⚠️ Tesis ilegible {nombre}: {motivo}. "
+            "Sharky la ignora y no vigila su stop-loss hasta que se corrija."
+        )
 
     def leer_fechas_revision_tesis(self) -> Dict[str, str]:
         """Ticker -> `fecha_revision` de cada tesis activa que la tenga.

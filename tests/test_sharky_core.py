@@ -10,6 +10,7 @@ Cubre los invariantes que la versión anterior violaba:
 """
 
 import json
+import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -1205,6 +1206,48 @@ class TestBoveda:
 
         tickers = {t.ticker for _, t in vault_tmp.list_active_theses()}
         assert tickers == {"AAA"}
+
+    def test_una_tesis_con_marcadores_sin_rellenar_se_avisa_una_vez(self, vault_tmp, capsys):
+        """Copiada de la plantilla con algún `{{...}}` sin rellenar, el YAML no
+        es válido. Hasta 2026-09 se ignoraba en silencio y su stop dejaba de
+        vigilarse sin que nada lo dijera."""
+        (vault_tmp.vault_path / "01_Tesis_Activas" / "Tesis_ZZZ.md").write_text(
+            "---\nticker: ZZZ\nestado: Activa\nstop_loss: {{STOP_LOSS}}\n---\n\nCuerpo.\n",
+            encoding="utf-8",
+        )
+
+        assert vault_tmp.list_active_theses() == []
+        assert vault_tmp.list_active_theses() == []
+
+        salida = capsys.readouterr().out
+        assert salida.count("Tesis ilegible Tesis_ZZZ.md") == 1
+        assert "{{...}}" in salida
+
+    def test_la_plantilla_de_tesis_rellenada_se_lee_con_su_divisa(self, vault_tmp):
+        """La plantilla versionada es la que copia un usuario nuevo: rellena
+        entera tiene que leerse, `divisa` incluida. Si gana un marcador nuevo,
+        este test falla hasta que se le dé valor aquí."""
+        from sharky.config import BASE_DIR
+
+        plantilla = (BASE_DIR / "vault" / "07_Plantillas" / "Plantilla_Tesis.md").read_text(
+            encoding="utf-8"
+        )
+        valores = {
+            "TICKER": "ZZZ", "NOMBRE_EMPRESA": "Zeta", "LARGO_O_CORTO": "Largo",
+            "PRECIO_ENTRADA": "100", "DIVISA_DE_LOS_NIVELES": "USD", "STOP_LOSS": "90",
+            "TARGET_PRECIO": "130", "CONVICCION_1_A_10": "7", "CAPITAL_ASIGNADO": "500",
+            "RATIO_RR": "3", "FECHA_HOY": "2026-09-22", "SECTOR": "Tecnologia",
+        }
+        rellena = re.sub(r"\{\{(\w+)\}\}", lambda m: valores[m.group(1)], plantilla)
+        (vault_tmp.vault_path / "01_Tesis_Activas" / "Tesis_ZZZ.md").write_text(
+            rellena, encoding="utf-8"
+        )
+
+        ((_, tesis),) = vault_tmp.list_active_theses()
+
+        assert (tesis.ticker, tesis.divisa, tesis.stop_loss, tesis.target_precio) == (
+            "ZZZ", "USD", 90.0, 130.0,
+        )
 
     def test_deteccion_de_alerta_activa(self, vault_tmp):
         carpeta = vault_tmp.vault_path / "09_Alertas_Oportunidades"

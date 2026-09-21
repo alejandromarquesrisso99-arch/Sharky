@@ -4,6 +4,9 @@ empresa: "{{NOMBRE_EMPRESA}}"
 tipo: {{LARGO_O_CORTO}}
 estado: Activa
 precio_entrada: {{PRECIO_ENTRADA}}
+# Divisa de precio_entrada, stop_loss y target_precio. Si falta, Sharky
+# entiende EUR: un stop en dólares sin `divisa: USD` se compararía mal.
+divisa: {{DIVISA_DE_LOS_NIVELES}}
 stop_loss: {{STOP_LOSS}}
 target_precio: {{TARGET_PRECIO}}
 conviccion: {{CONVICCION_1_A_10}}
@@ -40,6 +43,6 @@ empresa_nota: "[[{{TICKER}}]]"
 
 ## 🛑 Plan de Invalidación y Salida
 
-* **Stop Loss Innegociable:** Si el precio cruza ${{STOP_LOSS}}, se asume la pérdida y se cierra la posición.
-* **Target Objetivo:** ${{TARGET_PRECIO}} para toma de beneficios.
+* **Stop Loss Innegociable:** Si el precio cruza {{STOP_LOSS}} {{DIVISA_DE_LOS_NIVELES}}, se asume la pérdida y se cierra la posición.
+* **Target Objetivo:** {{TARGET_PRECIO}} {{DIVISA_DE_LOS_NIVELES}} para toma de beneficios.
 * **Criterio de Invalidez Cualitativo:** [Qué evento fundamental haría descartar la tesis inmediatamente]

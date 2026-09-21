@@ -7,6 +7,9 @@
 > **Obsidian** como memoria de largo plazo, con **Claude** en el rol de *Chief
 > Investment Officer*.
 
+**¿Primera vez?** Empieza por la [guía de nuevo usuario](GUIA_NUEVO_USUARIO.md):
+de cero a tener Sharky vigilando tu cartera, paso a paso.
+
 **Divisa base: EUR.** La cartera está denominada en euros; los activos que
 cotizan en USD, HKD o GBp se convierten explícitamente. Ninguna cifra mezcla
 divisas.
@@ -344,6 +347,9 @@ python -m sharky.cli init     # clave de Claude y posiciones (ver «Primeros pas
 ```
 
 ### Primeros pasos
+
+La [guía de nuevo usuario](GUIA_NUEVO_USUARIO.md) recorre todo esto paso a
+paso, desde instalar Python hasta dejar Sharky funcionando solo.
 
 La bóveda y el `.env` no están en el repositorio: cada persona empieza con
 los suyos. Al lanzar cualquier comando, o la app, sin libro de posiciones,
