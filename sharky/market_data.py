@@ -246,7 +246,9 @@ class MarketDataProvider:
                 cur = data.get("currency") if hasattr(data, "get") else None
                 if cur:
                     return str(cur)
-            except Exception:
+            # yfinance falla de formas muy distintas según el atributo (red,
+            # KeyError, TypeError...); si uno no da la divisa, se prueba el otro.
+            except Exception:  # nosec B112
                 continue
         return None
 
@@ -266,7 +268,9 @@ class MarketDataProvider:
                 mc_val = float(mc_raw)
                 if not math.isnan(mc_val) and mc_val > 0:
                     market_cap = mc_val
-        except Exception:
+        # Los fundamentales son opcionales: si yfinance falla se devuelve lo
+        # que se llegara a leer, y lo que falte queda como None (sin dato).
+        except Exception:  # nosec B110
             pass
         return pe_ratio, market_cap
 

@@ -22,8 +22,9 @@ aplica lo mismo a lo que ya estaba escrito:
      ticker con ficha pasa a `[[Ficha|TICKER]]`, que se lee igual, y lo que no
      resuelve a nada queda como texto plano.
 
-Idempotente: una segunda ejecución no cambia nada. La bóveda está versionada,
-así que el resultado se revisa con `git diff vault/`.
+Idempotente: una segunda ejecución no cambia nada. La bóveda no se versiona
+(ver .gitignore): haz antes una copia con `scripts/backup_vault.ps1` si
+quieres poder comparar el resultado.
 
 Uso:
     python scripts/reparar_enlaces_vault.py

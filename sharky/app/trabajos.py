@@ -209,8 +209,10 @@ class GestorTrabajos:
             if self._al_terminar:
                 try:
                     self._al_terminar(trabajo)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # El aviso de fin no puede tumbar un trabajo ya terminado,
+                    # pero tampoco debe fallar en silencio.
+                    trabajo.log.append(f"\n[No se pudo avisar del fin del trabajo: {exc}]")
 
     def buscar(self, trabajo_id: str) -> Optional[Trabajo]:
         with self._lock:

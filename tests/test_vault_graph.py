@@ -5,10 +5,19 @@ Valida que no existan enlaces rotos, notas huérfanas o callejones sin salida en
 
 import re
 from collections import defaultdict
+
+import pytest
+
 from sharky.config import VAULT_PATH
 
 
 def test_obsidian_graph_integrity():
+    # La bóveda personal no se versiona (el repositorio es público, ver
+    # .gitignore): en la CI sólo están las plantillas y las notas de reglas,
+    # y un grafo incompleto no dice nada. Se comprueba en local.
+    if not (VAULT_PATH / "00_Sistema" / "Cartera_Real.md").exists():
+        pytest.skip("Bóveda personal no disponible (no se versiona): se comprueba en local.")
+
     md_files = list(VAULT_PATH.rglob("*.md"))
     assert len(md_files) >= 50, f"Expected >= 50 notes in vault, got {len(md_files)}"
 

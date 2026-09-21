@@ -7,11 +7,11 @@
     (fuera del control de versiones -- ver .gitignore) y conserva sólo las
     últimas $Retener copias para no llenar el disco sin límite.
 
-    El vault ya está versionado con git, pero un backup local aparte cubre lo
-    que git no cubre: un fallo de disco antes de hacer commit, o un `git push`
-    que sencillamente no se ha ejecutado todavía. `Cartera_Real.md` y
-    `Estado_Vital.md` son la única fuente de verdad del NAV -- perder esa
-    carpeta sin backup es perder el registro de la propia cartera.
+    El vault NO se versiona con git (el repositorio es público y la bóveda
+    lleva los datos de la cartera real, ver .gitignore), así que esta es su
+    única copia de seguridad. `Cartera_Real.md` y `Estado_Vital.md` son la
+    única fuente de verdad del NAV -- perder esa carpeta sin backup es perder
+    el registro de la propia cartera.
 
     Pensado para dispararse automáticamente al final de cada ciclo diario
     (ver sharky_windows_startup.bat), pero se puede ejecutar suelto en

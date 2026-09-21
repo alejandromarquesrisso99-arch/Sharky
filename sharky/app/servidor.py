@@ -26,7 +26,7 @@ import os
 import secrets
 import shutil
 import socket
-import subprocess
+import subprocess  # nosec B404 -- sólo abre el navegador local, ver abrir_ventana
 import sys
 import threading
 import time
@@ -391,7 +391,9 @@ def abrir_ventana(url: str) -> None:
     navegador = _navegador_app()
     if navegador:
         try:
-            subprocess.Popen([navegador, f"--app={url}", "--window-size=1440,920"])
+            # Sin shell, y el ejecutable sale de la lista fija de `_navegador_app`
+            # (Edge o Chrome); la URL es la de este mismo servidor en 127.0.0.1.
+            subprocess.Popen([navegador, f"--app={url}", "--window-size=1440,920"])  # nosec B603
             return
         except OSError:
             pass

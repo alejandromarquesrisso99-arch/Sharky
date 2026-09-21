@@ -29,12 +29,15 @@ Tres reglas gobiernan todo el código, y explican por qué está escrito así:
 3. **Los límites de riesgo son código, no prosa.** `RiskGovernor` implementa
    literalmente los axiomas de `vault/00_Sistema/Reglas_De_Supervivencia.md`, y
    ninguna operación entra en el libro sin pasar por él.
-4. **Este repositorio debe seguir siendo privado.** El libro de posiciones real
-   (`Cartera_Real.md`) y la auditoría inicial de cartera viven también en el
-   **historial** de git, no sólo en el HEAD: quitarlos de una nota no los saca
-   de ahí. Un cambio de visibilidad a público, un fork o añadir un colaborador
-   expondría datos financieros reales. Si algún día esto necesitara ser
-   público, hay que purgar antes ese historial (`git filter-repo`).
+4. **La bóveda personal no se versiona.** El repositorio es público y Sharky
+   escribe datos de la cartera real en casi toda la bóveda (libro de
+   posiciones, estado vital, operaciones, diarios, tesis, rebalanceos), así
+   que `.gitignore` la deja fuera entera: sólo se versionan las plantillas y
+   las cuatro notas de reglas que los tests contrastan con el código. La
+   bóveda vive en local y en `backups/`. Antes de añadir una excepción a
+   `.gitignore`, comprueba que la nota no lleva importes, unidades ni
+   posiciones: lo que entra en el historial de git ya no sale de él sin
+   reescribirlo.
 
 ---
 
@@ -439,8 +442,9 @@ estuviera escrito.
 
 Cada ejecución de `SharkyStartup` termina con un backup local del vault
 (`scripts\backup_vault.ps1`, retiene las últimas 14 copias en `backups\`,
-fuera de git) -- además del propio git, para cubrir un fallo de disco antes
-de hacer commit o un `git push` que todavía no se ha ejecutado.
+fuera de git). Como la bóveda no se versiona (ver principio 4), esa es su
+única copia de seguridad: si quieres una copia fuera del equipo, guarda
+`backups\` en un disco externo o en un repositorio **privado** aparte.
 
 Como Sharky no es un servicio permanente, un fallo silencioso de
 `SharkyStartup` (entorno virtual roto, red caída, una excepción no

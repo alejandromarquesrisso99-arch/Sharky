@@ -25,10 +25,24 @@ build/
 # Logs del arranque automático en Windows
 logs/
 
-# Backups locales del vault (scripts/backup_vault.ps1). El vault en sí SÍ se
-# versiona con git; esto es la copia de seguridad fuera de git, no un
-# sustituto de hacer commit/push con regularidad.
+# Backups locales del vault (scripts/backup_vault.ps1): la única copia de
+# seguridad de la bóveda, que no se versiona (ver abajo).
 backups/
+
+# Bóveda personal. El repositorio es público y Sharky escribe datos de la
+# cartera real en casi toda la bóveda (libro de posiciones, estado vital,
+# operaciones, diarios, tesis, rebalanceos, noticias), así que se ignora
+# entera. Sólo se versiona lo que no contiene ningún dato de la cartera: las
+# plantillas y las notas de reglas que `tests/test_vault_sync.py` contrasta
+# con `sharky/config.py`. Antes de añadir otra excepción, comprueba que la
+# nota no lleve importes, unidades ni posiciones.
+/vault/**
+!/vault/**/
+!/vault/07_Plantillas/*.md
+!/vault/00_Sistema/Reglas_De_Supervivencia.md
+!/vault/00_Sistema/Metricas_Riesgo.md
+!/vault/00_Comite_Direccion/Mandato_Institucional.md
+!/vault/03_Mesa_Cuantitativa_Riesgo/Politica_Control_Riesgo.md
 
 # Archivos de sistema y editores
 .DS_Store
