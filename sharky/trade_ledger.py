@@ -229,7 +229,10 @@ class TradeRecorder:
                             # La comisión se capitaliza en el coste de adquisición.
                             coste_unitario_eur=round((bruto_eur + orden.comision_eur) / unidades, 6),
                             sector=sector_efectivo,
-                            nota_activo=f"[[{ticker}]]",
+                            # La ficha que ya tenga (una posición recomprada,
+                            # una alerta del radar), o la que se creará con
+                            # el nombre del ticker tras el asiento.
+                            nota_activo=f"[[{self.vault.nota_de(ticker)}]]",
                         )
                     )
                 else:
@@ -302,6 +305,18 @@ class TradeRecorder:
                 f"\n\n⚠️ La operación quedó asentada en el libro, pero no se pudo "
                 f"actualizar Estado_Vital.md: {exc}"
             )
+
+        if tipo_orden == OrderType.COMPRA and existente is None:
+            try:
+                self.vault.asegurar_ficha(
+                    ticker, nombre or ticker, sector_efectivo,
+                    origen="Cartera_Real", seguimiento="Activo_Cartera",
+                )
+            except Exception as exc:
+                avisos_post_asiento += (
+                    f"\n\n⚠️ La operación quedó asentada, pero no se pudo crear la "
+                    f"ficha del activo en 03_Activos: {exc}"
+                )
 
         nota = None
         try:

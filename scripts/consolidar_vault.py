@@ -12,8 +12,9 @@ mostraba el conjunto real de relaciones.
 Criterio
 --------
 Gana la nota que **contiene el análisis**, no la que tiene el nombre más corto.
-El nombre eliminado se conserva como `aliases` en la nota canónica, de modo que
-seguir escribiendo `[[RHM]]` en Obsidian continúa resolviendo.
+El nombre eliminado se conserva como `aliases` en la nota canónica, para que
+Obsidian la sugiera al enlazar. Un `[[RHM]]` escrito tal cual NO resuelve por
+alias: eso lo corrige `reparar_enlaces_vault.py` (2026-09).
 
 El código sigue identificando los activos por su ticker: la correspondencia
 ticker → nota vive en el campo `nota_activo` del libro de posiciones.

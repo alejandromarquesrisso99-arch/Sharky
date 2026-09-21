@@ -137,8 +137,15 @@ en cada ciclo.
 
 El nombre de una ficha no siempre es el ticker: la de Rheinmetall es
 `Rheinmetall`, no `RHM`. La correspondencia la declara el campo `nota_activo` del
-libro de posiciones, y los nombres alternativos viven como `aliases`, de modo que
-escribir `[[RHM]]` en Obsidian sigue resolviendo.
+libro de posiciones y, para lo que no está en cartera, el `ticker` y los
+`aliases` de cada ficha. Ojo: Obsidian usa los `aliases` para *sugerir* la ficha
+mientras escribes un enlace, pero un `[[RHM]]` escrito tal cual apunta a una
+nota `RHM` que no existe. Por eso `VaultManager` normaliza al escribir todo lo
+que redacta Claude, que enlaza por ticker: `[[RHM]]` se guarda como
+`[[Rheinmetall|RHM]]`, y un enlace que no resuelve a ninguna nota queda como
+texto plano. Y si una posición nueva o una alerta del radar enlaza a un activo o
+a un sector sin nota, se crea una ficha mínima en `03_Activos` (apuntada en su
+MOC, bajo «Altas Automáticas») en vez de dejar el enlace roto.
 
 ---
 
@@ -445,10 +452,12 @@ propósito. Para eso existe una segunda tarea, independiente:
 powershell -ExecutionPolicy Bypass -File .\scripts\instalar_heartbeat_windows.ps1
 ```
 
-Registra `SharkyHeartbeatCheck`, que comprueba `ultima_actualizacion` de
-`Estado_Vital.md` (el mismo timestamp que ya escribe cada ciclo) y, si
-lleva más de 36 horas sin refrescarse -- o nunca se escribió --, muestra un
-aviso emergente además de registrarlo en `logs\sharky_heartbeat.log`.
+Registra `SharkyHeartbeatCheck`, que comprueba `ultimo_ciclo_diario` de
+`Estado_Vital.md` (el timestamp que escribe cada ciclo diario, y sólo él:
+`ultima_actualizacion` también lo refresca `sharky trade`, y una operación
+registrada taparía un arranque fallido) y, si lleva más de 36 horas sin
+refrescarse -- o nunca se escribió --, muestra un aviso emergente además de
+registrarlo en `logs\sharky_heartbeat.log`.
 
 ```powershell
 # Comprobar el registro / desinstalar
@@ -681,6 +690,7 @@ Scripts de un solo uso, idempotentes, en `scripts/`:
 | :--- | :--- |
 | `migrar_a_eur.py` | Limpia el estado heredado de la versión en USD: resiembra el máximo histórico del NAV y caduca las alertas del detector antiguo. |
 | `consolidar_vault.py` | Fusiona notas duplicadas del mismo activo y reapunta los wikilinks. Admite `--dry-run`. |
+| `reparar_enlaces_vault.py` | Crea las fichas y notas de sector que faltan y reapunta a su ficha los enlaces por ticker (`[[RHM]]` → `[[Rheinmetall\|RHM]]`) que dejaba el texto de Claude antes de que `VaultManager` los normalizara al escribir. Lo que no resuelve a nada queda como texto plano. |
 
 ---
 

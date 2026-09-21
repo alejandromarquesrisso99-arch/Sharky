@@ -4,11 +4,17 @@ Comprueba que el ciclo diario de Sharky sigue corriendo con normalidad.
 Contexto
 --------
 Sharky no es un servicio permanente: se lanza una vez al iniciar sesión
-(ver `instalar_inicio_windows.ps1`) y cada ciclo que termina bien actualiza
-`ultima_actualizacion` en `Estado_Vital.md` vía
+(ver `instalar_inicio_windows.ps1`) y cada ciclo diario que termina bien
+actualiza `ultimo_ciclo_diario` en `Estado_Vital.md` vía
 `VaultManager.update_health_status()`. Ese timestamp ya es, de hecho, un
 heartbeat -- lo único que faltaba era algo que lo comprobara y avisara si
-deja de refrescarse. Sin esto, un fallo silencioso del Task Scheduler
+deja de refrescarse.
+
+No sirve `ultima_actualizacion`: ese lo refresca también `sharky trade`, así
+que registrar una operación el día en que el arranque falló taparía el fallo
+(el mismo motivo por el que `ya_completo_ciclo_hoy` dejó de usarlo, ver
+CICLO-2 en REVISION_2026-09-12.md). Sólo se recurre a él en una bóveda
+anterior a `ultimo_ciclo_diario`, que todavía no tiene ese campo. Sin esto, un fallo silencioso del Task Scheduler
 (entorno virtual roto, red caída, una excepción no capturada) simplemente
 deja de aparecer en pantalla, y nadie se entera hasta que alguien abre el
 vault a propósito -- que es justo el tipo de brecha operativa que más
@@ -16,7 +22,7 @@ tiempo tarda en descubrirse.
 
 Qué hace
 --------
-Lee `ultima_actualizacion` y devuelve código de salida 1 (con un mensaje
+Lee `ultimo_ciclo_diario` y devuelve código de salida 1 (con un mensaje
 por stdout) si lleva más de `--max-horas` sin refrescarse, o si el fichero
 nunca se ha escrito. Código 0 si está fresco. Pensado para una tarea
 programada aparte de `SharkyStartup` (ver
@@ -40,15 +46,18 @@ from sharky.vault_manager import VaultManager  # noqa: E402
 
 
 def horas_desde_el_ultimo_ciclo(vault_path: Path = VAULT_PATH) -> float:
-    """Horas transcurridas desde `ultima_actualizacion` de Estado_Vital.md.
+    """Horas transcurridas desde el último ciclo diario de Estado_Vital.md.
 
     `float("inf")` si el fichero no existe o nunca se ha escrito: eso
     también cuenta como "obsoleto", no como "no aplica".
     """
     salud = VaultManager(vault_path).read_health_status()
-    if salud.ultima_actualizacion == datetime.min:
+    ultimo = salud.ultimo_ciclo_diario
+    if ultimo == datetime.min:
+        ultimo = salud.ultima_actualizacion  # bóveda sin el campo todavía
+    if ultimo == datetime.min:
         return float("inf")
-    delta = datetime.now() - salud.ultima_actualizacion
+    delta = datetime.now() - ultimo
     return delta.total_seconds() / 3600.0
 
 

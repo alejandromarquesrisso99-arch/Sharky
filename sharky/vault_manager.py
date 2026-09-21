@@ -8,7 +8,7 @@ valoradas a coste, análisis simulado), la nota lo declara de forma visible.
 
 from pathlib import Path
 import re
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 from datetime import date, datetime, timedelta
 
 import yaml
@@ -60,6 +60,20 @@ ICONOS_VITALES = {
     VitalState.MUERTE: "💀",
 }
 
+# Wikilink `[[destino]]`, `[[destino|alias]]` o `[[destino\|alias]]` (esta
+# última forma, dentro de tablas; ver `enlace`). El lookbehind deja fuera los
+# embebidos `![[...]]`.
+_WIKILINK = re.compile(r"(?<!!)\[\[([^\[\]\n]+?)\]\]")
+
+# Caracteres que Windows no admite en un nombre de fichero: un ticker o un
+# sector que los lleve no puede tener nota propia.
+_NOMBRE_NO_VALIDO = re.compile(r'[\\/:*?"<>|]')
+
+# Encabezados del MOC de `03_Activos` bajo los que se apuntan las notas que
+# Sharky crea solo (ver `asegurar_ficha` y `asegurar_sector`).
+ENCABEZADO_FICHAS_NUEVAS = "### 🆕 Altas Automáticas"
+ENCABEZADO_SECTORES_NUEVOS = "### 🆕 Sectores Añadidos"
+
 
 def eur(valor: float) -> str:
     """Formatea un importe en la divisa base. Existe para que ningún informe
@@ -101,9 +115,11 @@ class VaultManager:
         """Correspondencia ticker -> nombre de la ficha en Obsidian.
 
         El ticker y el nombre de la nota no siempre coinciden: la ficha de
-        Rheinmetall se llama `Rheinmetall`, no `RHM`. La correspondencia la
-        declara `nota_activo` en el libro de posiciones. Se memoiza porque los
-        informes la consultan por cada fila.
+        Rheinmetall se llama `Rheinmetall`, no `RHM`. Manda `nota_activo` del
+        libro de posiciones; después, el `ticker` y los `aliases` que declara
+        cada ficha de `03_Activos`, para que un ticker que no está en cartera
+        (una posición ya vendida, una alerta del radar) siga resolviendo a su
+        ficha. Se memoiza porque los informes la consultan por cada fila.
         """
         if self._mapa_notas_cache is not None:
             return self._mapa_notas_cache
@@ -117,8 +133,194 @@ class VaultManager:
                 nota = str(cruda.get("nota_activo", "") or "").strip().strip("[]")
                 if ticker and nota:
                     mapa[ticker.upper()] = nota
+
+        for ficha in sorted((self.vault_path / "03_Activos").rglob("*.md")):
+            meta, _ = self.parse_markdown(ficha.read_text(encoding="utf-8"))
+            if not isinstance(meta, dict):
+                continue
+            aliases = meta.get("aliases") or []
+            if isinstance(aliases, str):
+                aliases = [aliases]
+            for clave in [meta.get("ticker"), *aliases]:
+                clave = str(clave or "").strip().upper()
+                if clave:
+                    mapa.setdefault(clave, ficha.stem)
+
         self._mapa_notas_cache = mapa
         return mapa
+
+    def nota_de(self, ticker: str) -> str:
+        """Nombre de la ficha de un ticker; el propio ticker si no tiene."""
+        ticker = (ticker or "").strip()
+        return self._mapa_notas().get(ticker.upper(), "") or ticker
+
+    def _notas_existentes(self) -> Set[str]:
+        """Todo lo que un wikilink puede resolver: el nombre de cada nota (sin
+        `.md`) y el nombre completo de cualquier otro fichero de la bóveda."""
+        nombres: Set[str] = set()
+        for ruta in self.vault_path.rglob("*"):
+            if ruta.is_file() and ".obsidian" not in ruta.parts:
+                nombres.add(ruta.stem if ruta.suffix == ".md" else ruta.name)
+        return nombres
+
+    def normalizar_enlaces(self, texto: str) -> str:
+        """Deja cada wikilink de un texto apuntando a una nota que existe.
+
+        Pensado para lo que redacta Claude: el prompt le pide enlazar por
+        ticker (`[[RHM]]`), que es lo único que conoce, pero las fichas no
+        siempre se llaman como su ticker. Hasta 2026-09 esos enlaces se
+        guardaban tal cual y cada diario dejaba varios rotos en el grafo.
+        Cada enlace sigue una de tres vías:
+
+          * apunta a una nota que existe -> se deja como está;
+          * es el ticker de una ficha -> `[[Rheinmetall|RHM]]`, que se lee
+            igual que antes (con `\\|` dentro de una tabla, ver `enlace`);
+          * no resuelve a nada -> texto plano. Un enlace roto no lleva a
+            ningún sitio y, al pulsarlo, Obsidian crea una nota vacía; el
+            nombre sigue leyéndose igual sin él.
+
+        No toca embebidos (`![[...]]`) ni variables de plantilla (`{{...}}`).
+        """
+        if "[[" not in texto:
+            return texto
+        existentes = self._notas_existentes()
+        mapa = self._mapa_notas()
+
+        def en_linea(linea: str) -> str:
+            # También cuenta como tabla la que va dentro de un callout (`> |`).
+            separador = "\\|" if linea.lstrip("> \t").startswith("|") else "|"
+
+            def sustituir(m: "re.Match[str]") -> str:
+                destino, _, alias = m.group(1).partition("|")
+                destino = destino.rstrip("\\").strip()
+                alias = alias.strip()
+                nota = destino.split("#", 1)[0].strip()
+                if not nota or "{{" in destino or nota in existentes:
+                    return m.group(0)
+                ficha = mapa.get(nota.upper(), "")
+                if ficha and ficha in existentes:
+                    return f"[[{ficha}{separador}{alias or nota}]]"
+                return alias or nota
+
+            return _WIKILINK.sub(sustituir, linea)
+
+        return "\n".join(en_linea(linea) for linea in texto.split("\n"))
+
+    def asegurar_ficha(
+        self,
+        ticker: str,
+        nombre: str = "",
+        sector: str = "",
+        origen: str = "",
+        seguimiento: str = "En_Radar",
+    ) -> Optional[Path]:
+        """Crea una ficha mínima en `03_Activos/Empresas` si el activo no tiene.
+
+        Cada posición y cada alerta enlaza a su ficha (`enlace`,
+        `nota_activo`), pero hasta 2026-09 ninguna ficha se creaba sola: una
+        posición abierta con `sharky trade` o una alerta nueva del radar
+        dejaban un enlace roto hasta que alguien la escribiera a mano. La
+        ficha nace sólo con lo que se sabe -- identidad, sector y de dónde
+        viene -- y dice a la vista que el perfil está por completar.
+
+        `origen` es el nombre de la nota que motivó el alta (la alerta, o
+        `Cartera_Real`). Devuelve la ruta creada, o None si ya había ficha.
+        """
+        ticker = (ticker or "").strip()
+        nombre_nota = self.nota_de(ticker)
+        if (
+            not ticker
+            or _NOMBRE_NO_VALIDO.search(nombre_nota)
+            or nombre_nota in self._notas_existentes()
+        ):
+            return None
+
+        if sector:
+            self.asegurar_sector(sector)
+
+        hoy = date.today().isoformat()
+        nombre = nombre or ticker
+        tesis = self.buscar_tesis(ticker)
+        meta = {
+            "ticker": ticker,
+            "nombre": nombre,
+            "sector": f"[[{sector}]]" if sector else "",
+            "seguimiento": seguimiento,
+            "tesis_asociadas": f"[[{tesis.stem}]]" if tesis else "",
+            "ficha_automatica": True,
+            "fecha_alta": hoy,
+        }
+        grafo = [f"* Origen: [[{origen}]]"] if origen else []
+        if tesis:
+            grafo.append(f"* Tesis de Inversión: [[{tesis.stem}]]")
+        if sector:
+            grafo.append(f"* Sector: [[{sector}]]")
+        grafo.append("* Directorio: [[03_Activos]] | Mandato: [[Reglas_De_Supervivencia]]")
+        lineas_grafo = "\n".join(grafo)
+
+        cuerpo = f"""# 🏢 Activo: {nombre} ({ticker})
+
+> [!NOTE]
+> Ficha creada automáticamente el {hoy} para que los enlaces a `{ticker}` no
+> queden rotos en el grafo. Faltan el perfil del negocio y las métricas de
+> vigilancia: complétalos con `07_Plantillas/Plantilla_Empresa` cuando
+> empieces a seguirlo de cerca.
+
+---
+
+## 🔗 Enlaces del Grafo
+
+{lineas_grafo}
+"""
+        ruta = self.vault_path / "03_Activos" / "Empresas" / f"{nombre_nota}.md"
+        atomic_write_text(ruta, self.build_markdown(meta, cuerpo), encoding="utf-8")
+        self._mapa_notas_cache = None
+        etiqueta = f"[[{nombre_nota}]]" + (f" ({ticker})" if nombre_nota != ticker else "")
+        self._append_to_moc("03_Activos", ENCABEZADO_FICHAS_NUEVAS, f"* {etiqueta} — {nombre}")
+        return ruta
+
+    def asegurar_sector(self, sector: str) -> Optional[Path]:
+        """Crea una nota mínima en `03_Activos/Sectores` si el sector no tiene.
+
+        Mismo motivo que `asegurar_ficha`: las tesis y las fichas enlazan su
+        sector (`[[Defensa_Naval]]`), y un sector nuevo en el libro de
+        posiciones dejaba ese enlace roto. Devuelve la ruta creada, o None si
+        ya existía.
+        """
+        sector = (sector or "").strip().strip("[]").strip()
+        if (
+            not sector
+            or _NOMBRE_NO_VALIDO.search(sector)
+            or sector in self._notas_existentes()
+        ):
+            return None
+
+        hoy = date.today().isoformat()
+        legible = sector.replace("_", " ")
+        meta = {
+            "tipo": "sector",
+            "nombre": legible,
+            "nota_automatica": True,
+            "fecha_alta": hoy,
+        }
+        cuerpo = f"""# 🏭 Sector: {legible}
+
+> [!NOTE]
+> Nota de sector creada automáticamente el {hoy}: algún activo o tesis ya se
+> clasificaba en `{sector}` y su enlace quedaba roto. Falta el panorama del
+> sector; el tope de exposición sectorial del mandato aplica igual.
+
+---
+
+## 🔗 Enlaces Bidireccionales del Grafo
+
+* Mapa de Activos: [[03_Activos]]
+* Riesgo: [[Politica_Control_Riesgo]], [[Reglas_De_Supervivencia]]
+"""
+        ruta = self.vault_path / "03_Activos" / "Sectores" / f"{sector}.md"
+        atomic_write_text(ruta, self.build_markdown(meta, cuerpo), encoding="utf-8")
+        self._append_to_moc("03_Activos", ENCABEZADO_SECTORES_NUEVOS, f"* [[{sector}]]")
+        return ruta
 
     def enlace(self, ticker: str, nota: str = "") -> str:
         """Wikilink a la ficha del activo, mostrando siempre el ticker.
@@ -774,6 +976,15 @@ class VaultManager:
             raise ValueError(f"{ruta.name}: la nota no tiene frontmatter que anotar")
         apertura, frontmatter, cierre, cuerpo = casada.groups()
 
+        # Sólo se normaliza lo que redacta Claude, no la nota: lo que ya estaba
+        # escrito se conserva tal cual (regla 1 de `thesis_review`).
+        veredicto = veredicto.model_copy(update={
+            campo: self.normalizar_enlaces(getattr(veredicto, campo))
+            for campo in (
+                "que_ha_cambiado", "que_sigue_en_pie", "que_la_invalidaria", "propuesta_niveles",
+            )
+        })
+
         frontmatter_nuevo = self._fijar_clave(frontmatter, "fecha_revision", fecha_str)
         frontmatter_nuevo = self._fijar_clave(
             frontmatter_nuevo, "veredicto_revision", veredicto.veredicto
@@ -924,9 +1135,19 @@ class VaultManager:
             "estado": alert.estado.value,
         }
 
+        # La ficha va antes que el cuerpo: así su enlace ya resuelve cuando se
+        # normaliza el texto de la alerta, que puede venir de Claude (ver
+        # `market_explorer`).
+        self.asegurar_ficha(alert.ticker, alert.empresa, origen=file_path.stem)
+
         d = alert.divisa
-        cat = "\n".join(f"{i+1}. **{c}**" for i, c in enumerate(alert.catalizadores)) or "- Pendiente de catalizador."
-        rsg = "\n".join(f"* {r}" for r in alert.riesgos) or "- Riesgos generales de mercado."
+        descripcion = self.normalizar_enlaces(alert.descripcion_oportunidad)
+        cat = self.normalizar_enlaces(
+            "\n".join(f"{i+1}. **{c}**" for i, c in enumerate(alert.catalizadores))
+        ) or "- Pendiente de catalizador."
+        rsg = self.normalizar_enlaces(
+            "\n".join(f"* {r}" for r in alert.riesgos)
+        ) or "- Riesgos generales de mercado."
 
         aviso = ""
         if not alert.fuente_precio.es_fiable:
@@ -947,7 +1168,7 @@ class VaultManager:
 
 ## 💎 1. Tesis Rápida
 
-{alert.descripcion_oportunidad}
+{descripcion}
 
 ---
 
@@ -1025,6 +1246,9 @@ class VaultManager:
 
         propuestos = [c.ticker for c in resultado.candidatos]
         emitidas = [a.ticker for a in alertas_emitidas]
+        # Los candidatos son por definición activos sin ficha: si Claude los
+        # enlaza por ticker, esos enlaces no llevarían a ningún sitio.
+        texto = self.normalizar_enlaces(resultado.texto)
 
         meta = {
             "tipo": "exploracion_mercado",
@@ -1037,7 +1261,7 @@ class VaultManager:
             "tickers_propuestos": propuestos,
             "tickers_alertados": emitidas,
             "conclusion_exploracion": (
-                extraer_conclusion(resultado.texto, CONCLUSION_EXPLORACION)
+                extraer_conclusion(texto, CONCLUSION_EXPLORACION)
                 if resultado.disponible else ""
             ),
         }
@@ -1070,7 +1294,7 @@ class VaultManager:
 
 ## 1. Candidatos Propuestos
 
-{resultado.texto or "_Sin informe._"}
+{texto or "_Sin informe._"}
 
 ---
 
@@ -1304,6 +1528,12 @@ qué parte no? Si el cierre vino de un stop-loss, la lección va a
         riesgo = precio_entrada - stop
         ratio = round((target - precio_entrada) / riesgo, 2) if riesgo > 0 else alerta.ratio_rr
 
+        # Una alerta anterior a `asegurar_ficha` puede no tener ficha, y el
+        # sector de la orden puede ser nuevo: la tesis enlaza a los dos.
+        origen_alerta = f"{alerta.fecha_deteccion}_ALERTA_{alerta.id_alerta}"
+        self.asegurar_ficha(alerta.ticker, alerta.empresa, sector, origen=origen_alerta)
+        self.asegurar_sector(sector)
+
         meta = {
             "ticker": alerta.ticker,
             "empresa": alerta.empresa,
@@ -1316,14 +1546,15 @@ qué parte no? Si el cierre vino de un stop-loss, la lección va a
             "ratio_rr": ratio,
             "fecha_apertura": fecha_str,
             "sectores": f"[[{sector}]]" if sector else "",
-            "empresa_nota": f"[[{alerta.ticker}]]",
+            "empresa_nota": f"[[{self.nota_de(alerta.ticker)}]]",
             "divisa": divisa,
             "tiene_posicion": True,
             "origen_alerta": alerta.id_alerta,
         }
 
-        tesis, catalizadores, riesgos = self._secciones_de_alerta(
-            alerta.descripcion_oportunidad
+        tesis, catalizadores, riesgos = (
+            self.normalizar_enlaces(seccion)
+            for seccion in self._secciones_de_alerta(alerta.descripcion_oportunidad)
         )
         operacion = (
             f"\n* Operación de apertura: `{id_operacion}` ([[04_Operaciones_Bitacora]])"
@@ -1367,7 +1598,7 @@ qué parte no? Si el cierre vino de un stop-loss, la lección va a
 | **Ratio R:R** | `{ratio:.2f} : 1` |
 | **Peso máximo en cartera** | `{alerta.pct_max_cartera:.1f}%` |
 
-> El stop-loss es la única salida obligatoria del mandato: [[level_watch]] lo
+> El stop-loss es la única salida obligatoria del mandato: `level_watch` lo
 > compara cada día contra el precio real ([[Reglas_De_Supervivencia]]).
 
 ---
@@ -1375,7 +1606,7 @@ qué parte no? Si el cierre vino de un stop-loss, la lección va a
 ## 🔗 Enlaces Bidireccionales del Grafo
 
 * Ficha de Empresa: {self.enlace(alerta.ticker)}
-* Alerta de origen: [[{alerta.fecha_deteccion}_ALERTA_{alerta.id_alerta}]]
+* Alerta de origen: [[{origen_alerta}]]
 * Cartera (fuente de verdad): [[Cartera_Real]]
 * Validación de Riesgo: [[Politica_Control_Riesgo]], [[Reglas_De_Supervivencia]]
 * MOC de Tesis: [[01_Tesis_Activas]]{operacion}
@@ -1847,6 +2078,7 @@ Verificado de forma determinista contra [[Reglas_De_Supervivencia]]:
     ) -> Path:
         """Estudio mensual completo de la cartera, junto al plan del motor."""
         file_path = self._ruta_estudio_mensual(mes)
+        texto = self.normalizar_enlaces(resultado.texto)
 
         meta = {
             "tipo": "estudio_mensual",
@@ -1856,7 +2088,7 @@ Verificado de forma determinista contra [[Reglas_De_Supervivencia]]:
             "inteligencia_simulada": resultado.simulado,
             "nav_eur": round(health.nav_actual_eur, 2),
             "drawdown_actual_pct": round(health.drawdown_actual_pct, 2),
-            "conclusion_mes": resultado.conclusion.strip(),
+            "conclusion_mes": self.normalizar_enlaces(resultado.conclusion.strip()),
         }
 
         aviso = ""
@@ -1880,7 +2112,7 @@ Plan del motor de rebalanceo contrastado en este estudio: {enlace_plan}
 
 ---
 
-{resultado.texto}
+{texto}
 
 ---
 
@@ -1921,6 +2153,10 @@ Plan del motor de rebalanceo contrastado en este estudio: {enlace_plan}
         que el escaneo semanal investigue primero lo que se movió con fuerza.
         """
         file_path = self.vault_path / "05_Diario_Reflexion" / f"{date_str}_Cierre_Mercado.md"
+        # Lo que redacta Claude (análisis y conclusión) enlaza por ticker.
+        summary = self.normalizar_enlaces(summary)
+        conclusion = self.normalizar_enlaces(conclusion)
+        events = self.normalizar_enlaces(events)
 
         meta = {
             "fecha": date_str,
@@ -2032,6 +2268,7 @@ stop-loss de emergencia.
             self.vault_path / "04_Sentimiento_Y_Flujos" / "Noticias_Semanales"
             / f"{fecha_str}_Noticias_Semanales.md"
         )
+        texto = self.normalizar_enlaces(resultado.texto)
 
         meta = {
             "tipo": "noticias_semanales",
@@ -2042,7 +2279,7 @@ stop-loss de emergencia.
             "disponible": resultado.disponible,
             # Lo que relee el estudio mensual además del resumen por activo.
             "conclusion_semana": (
-                extraer_conclusion(resultado.texto, CONCLUSION_SEMANA) if resultado.disponible else ""
+                extraer_conclusion(texto, CONCLUSION_SEMANA) if resultado.disponible else ""
             ),
         }
 
@@ -2066,7 +2303,7 @@ stop-loss de emergencia.
 
 ## 1. Resumen por Activo
 
-{resultado.texto}
+{texto}
 
 ---
 

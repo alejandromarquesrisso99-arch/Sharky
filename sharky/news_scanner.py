@@ -21,9 +21,12 @@ resuma noticias reales que nunca se buscaron, así que sin clave de API en
 vivo el escaneo simplemente no se ejecuta y lo declara.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:  # el SDK se importa en perezoso (ver __init__); aquí sólo tipos
+    from anthropic.types import MessageParam
 
 from sharky.claude_client import CONCLUSION_SEMANA
 from sharky.config import (
@@ -171,7 +174,7 @@ contexto de los controles diarios. La leerá el estudio mensual.
             NEWS_MAX_BUSQUEDAS_TOTAL, len(positions) * NEWS_MAX_BUSQUEDAS_POR_ACTIVO
         )
 
-        mensajes: List[Dict[str, Any]] = [
+        mensajes: "List[MessageParam]" = [
             {"role": "user", "content": self._prompt(positions, contexto_semana, prioritarios)}
         ]
         parametros: Dict[str, Any] = {

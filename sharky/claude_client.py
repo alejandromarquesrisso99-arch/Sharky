@@ -169,8 +169,12 @@ class ClaudeBrainClient:
                     respuesta = stream.get_final_message()
             else:
                 respuesta = self.client.messages.create(**parametros)
+            # `getattr` y no `bloque.text`: el contenido es una unión de tipos
+            # de bloque y sólo los de texto tienen `.text`.
             texto = "".join(
-                bloque.text for bloque in respuesta.content if getattr(bloque, "type", "") == "text"
+                str(getattr(bloque, "text", ""))
+                for bloque in respuesta.content
+                if getattr(bloque, "type", "") == "text"
             ).strip()
             if not texto:
                 # Diagnóstico explícito en vez de un "no contenía texto" a secas:
@@ -436,8 +440,12 @@ no aparezcan arriba: si algo falta o un precio no es fiable, dilo.
             aviso_sim = " [simulado -- sin razonamiento real ese día]" if meta.get(
                 "inteligencia_simulada"
             ) else ""
-            vigilar = meta.get("posiciones_a_vigilar") or []
-            txt_vigilar = f" | a vigilar: {', '.join(map(str, vigilar))}" if vigilar else ""
+            vigilar = meta.get("posiciones_a_vigilar")
+            txt_vigilar = (
+                f" | a vigilar: {', '.join(map(str, vigilar))}"
+                if isinstance(vigilar, list) and vigilar
+                else ""
+            )
             cabecera = (
                 f"- {meta.get('fecha', '?')}: {meta.get('estado_vital', '?')} "
                 f"(salud {meta.get('salud_al_cierre', '?')}%) | "
